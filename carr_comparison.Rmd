@@ -1,0 +1,1700 @@
+---
+title: "CARR_comparison"
+author: "Kate Nelson"
+date: "1/6/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE, cache= TRUE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, cache=TRUE, fig.width = 8, cache.lazy = FALSE)
+
+library(pacman)
+p_load(kableExtra, tidyverse, USAboundaries, tigris, doParallel, reshape2, sf, units, patchwork, ggcorrplot, scales, gridExtra, ggspatial)
+
+wd<-getwd()
+
+
+```
+
+# How does CARR measure up? {.tabset}
+
+Here we examine the CARR index and compare the Constructed CARR index with other rural-urban designations.
+
+
+```{r read_carr, eval = FALSE}
+
+# read in constructed index and drop territories
+full <- readRDS( "US_full_09032021.rds")
+
+carr <- read.csv("CARR index 092721.csv", stringsAsFactors = FALSE)
+
+orig <- full %>% mutate(geoid=as.numeric(GEOID))
+
+st<- us_states(map_date = NULL, resolution = c("low"), states = NULL) %>% shift_geometry(position="below")
+
+carr_sf <- left_join(orig, carr, by="geoid") %>% 
+  filter(!STATEFP %in% c("60","66","69", "72", "78")) %>% 
+  shift_geometry(.) %>% 
+  st_crop(., st)
+
+
+
+if(!file.exists("carr_index_022322.shp")){
+  car_shp <- carr_sf %>% 
+    dplyr::select(GEOID, STATEFP, avail1:carr3_rural)  %>% 
+    st_write(., "carr_index_022322.shp", append=FALSE)
+  } #save a trimmed down shapefile for making maps of the index and factors
+
+if(!file.exists("carr_full_03032022.rds")){
+  saveRDS(carr_sf, "carr_full_03032022.rds")
+  } #save a copy of the spatial data with all the input variables and created index
+
+```
+
+
+
+## CARR variant maps
+
+First, we'll simply map out the CARR index, calculated several different ways.
+
+```{r map_carr}
+
+#map the indexes
+
+carr_sf_maps <- st_read("carr_index_022322.shp")
+
+carr_sf_maps <- carr_sf_maps %>% filter(!STATEFP %in% c("02","15")) #drop non-coterminous states  (alaska and hawaii due to data limitations for landuse)
+
+ggplot() +  geom_sf(data = carr_sf_maps, aes(fill= carr1), size=0.2, color=NA )  +
+  scale_fill_viridis_c() + 
+  ggtitle("CARR")
+
+# ggsave("CARR_equal_weights.jpg")
+
+ggplot() +  geom_sf(data = carr_sf_maps, aes(fill= carr_urban), size=0.2, color=NA )  +
+  scale_fill_viridis_c() + 
+  ggtitle("CARR_urban")
+
+# ggsave("CARR_urban_equal_weights.jpg")
+
+ggplot() +  geom_sf(data = carr_sf_maps, aes(fill= carr3), size=0.2, color=NA )  +
+  scale_fill_viridis_c() + 
+  ggtitle("CARR3")
+
+# ggsave("CARR3_factor_analysis.jpg")
+
+ggplot() +  geom_sf(data = carr_sf_maps, aes(fill= carr3_rural), size=0.2, color=NA )  +
+  scale_fill_viridis_c() + 
+  ggtitle("CARR3_rural")
+
+# ggplot() +  geom_sf(data = carr_sf_maps, aes(fill= carr3_rural), size=0.2, color=NA )  +
+#   scale_fill_gradientn(colors = c("#fde9aa","#7b88b8","#1c2d83","#2e2a5a","#05234d"),
+#                        trans = "exp") + 
+#   ggtitle("CARR3_rural nightlights style")
+
+# ggsave("CARR3_rural_factor_analysis.jpg")
+
+```
+
+## Avail and Access factor maps
+
+Let's also map out the accessibility and availability factors. Maps show z-scores for the factor scores for each block group.
+
+```{r map_factors}
+
+#map the results of the factor analyses
+
+bump <- min(carr_sf_maps$avail1Z)
+
+ggplot() +  geom_sf(data = carr_sf_maps %>% filter(pop != 0), aes(fill= log(avail1Z + -1*bump)), size=0.2, color=NA )  +
+  scale_fill_viridis_c() + 
+  ggtitle("avail1 - this looks like more negative values are more rural - did we subtract this in the linear combination model?")
+
+ ggsave("CARR_avail1Z.jpg")
+
+ggplot() +  geom_sf(data = carr_sf_maps %>% filter(pop != 0), aes(fill= accss1Z), size=0.2, color=NA )  +
+  scale_fill_viridis_c() + 
+  ggtitle("access1")
+
+ggsave("CARR_access1Z.jpg")
+
+ggplot() +  geom_sf(data = carr_sf_maps %>% filter(pop != 0), aes(fill= accss2Z), size=0.2, color=NA )  +
+  scale_fill_viridis_c() + 
+  ggtitle("access2")
+
+ggsave("CARR_access2Z.jpg")
+
+ggplot() +  geom_sf(data = carr_sf_maps %>% filter(pop != 0), aes(fill= accss3Z), size=0.2, color=NA )  +
+  scale_fill_viridis_c() + 
+  ggtitle("access3")
+
+
+ggsave("CARR_access3Z.jpg")
+
+```
+## Descriptives for CARR by location
+
+Summarize CARR by state and county. Identify states and counties with the biggest range of CARR by blockgroup.
+
+
+```{r summarise_carr}
+### Get state and county summaries of CARR
+  
+  carr_st_summ <- carr_sf %>% group_by(STATEFP) %>% 
+    summarise(mean = mean(carr3_rural), stdev = sd(carr3_rural), min = min(carr3_rural), max = max(carr3_rural), range = max(carr3_rural)-min(carr3_rural)) 
+
+  
+  carr_st_summ %>% arrange(-range) %>% head() %>% kbl(caption = 'Descriptive Statistics of CARR3_rural by State') %>%
+  kable_classic(full_width = T, html_font = "Cambria") #states with biggest range of values are Florida, CA, NY,NV, OR, Michigan
+  
+  
+  carr_cnty_summ <- carr_sf %>% mutate(cntyfips = as.numeric(substr(GEOID,1,5))) %>% group_by(cntyfips) %>% 
+    summarise(mean = mean(carr3_rural), stdev = sd(carr3_rural), min = min(carr3_rural), max = max(carr3_rural), range = max(carr3_rural)-min(carr3_rural)) 
+  
+  
+  # carr_cnty_summ %>% arrange(-range) %>% head() #counties with biggest range of values are ( 12087,32023,6075, 36061,6111, 6037 )  and located in Florida, CA, NY,NV, 
+  
+  carr_cnty_summ %>% arrange(-range) %>% head(50) %>% kbl(caption = 'Descriptive Statistics of CARR3_rural by County: Descending order by range') %>%
+  kable_classic(full_width = T, html_font = "Cambria")#counties with biggest range of values are ( 12087,32023,6075, 36061,6111, 6037, 25025, 32031, 41045 ,  4027)  and located in Florida, CA, NY,NV, Massechusetts, Oregon, Arizona
+  
+```
+
+Now let's create some maps of these places with large ranges.
+
+
+
+```{r map_variability}
+
+carr_sf <- readRDS("carr_full_03032022.rds")
+
+carr_sf %>% 
+  filter(as.numeric(substr(GEOID,1,5)) == 12087) %>%
+  ggplot() +
+  annotation_map_tile(type = "osm", zoom = 9) +
+  geom_sf(color = "red", fill = NA) 
+
+    ggsave("everglades_carr.png", width = 6, height = 6, units = "in")
+    
+    carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 12087) %>%
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom = 9) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("everglades_carr_color.png", width = 6, height = 6, units = "in")
+
+carr_sf %>% 
+  filter(as.numeric(substr(GEOID,1,5)) == 32023) %>%
+  ggplot() +
+  annotation_map_tile(type = "osm", zoom = 9) +
+  geom_sf(color = "red", fill = NA) 
+
+    ggsave("vegas_carr.png", width = 6, height = 6, units = "in")
+    
+    carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 32023) %>%
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom = 9) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("vegas_carr_color.png", width = 6, height = 6, units = "in")
+
+carr_sf %>% 
+  filter(as.numeric(substr(GEOID,1,5)) == 6075) %>%
+  ggplot() +
+  annotation_map_tile(type = "osm", zoom = 10) +
+  geom_sf(color = "red", fill = NA) 
+
+    ggsave("sanfran_carr.png", width = 6, height = 6, units = "in")
+    
+    
+    carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 6075) %>%
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom = 10) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("sanfram_carr_color.png", width = 6, height = 6, units = "in")
+
+carr_sf %>% 
+  filter(as.numeric(substr(GEOID,1,5)) == 36061) %>%
+  ggplot() +
+  annotation_map_tile(type = "osm", zoom = 12) +
+  geom_sf(color = "red", fill = NA) 
+
+    ggsave("newyork_carr.png", width = 6, height = 6, units = "in")
+    
+    carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 36061) %>%
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom = 12) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("newyork_carr_color.png", width = 6, height = 6, units = "in")
+
+
+```
+
+
+
+
+
+There seem to be lots of higher rurality blockgroups that are in water and have zero (0) population, not sure why we even have blockgroups for water areas. Let's try dropping places with 0 population and checking for variability again.
+
+
+```{r summarise_carr_pop}
+
+# carr_sf <- readRDS("carr_full_03032022.rds")
+
+### Get state and county summaries of CARR
+  
+  carr_st_summ <- carr_sf %>% 
+  filter(pop != 0) %>%
+  group_by(STATEFP) %>% 
+    summarise(mean = mean(carr3_rural), 
+              stdev = sd(carr3_rural), 
+              min = min(carr3_rural), 
+              max = max(carr3_rural), 
+              range = max(carr3_rural)-min(carr3_rural)) 
+
+  
+  carr_st_summ %>% arrange(-range) %>% head() %>% kbl(caption = 'Descriptive Statistics of CARR3_rural by State') %>%
+  kable_classic(full_width = T, html_font = "Cambria") %>% #states with biggest range of values are CA, NY,NV, OR, Michigan, TX
+  save_kable(., "carr_st_summ_03072022.html")
+  
+  carr_cnty_summ <- carr_sf %>% 
+    filter(pop != 0) %>%
+    mutate(cntyfips = as.numeric(substr(GEOID,1,5))) %>% 
+    group_by(cntyfips) %>% 
+    summarise(mean = mean(carr3_rural), 
+              stdev = sd(carr3_rural), 
+              min = min(carr3_rural), 
+              max = max(carr3_rural), 
+              range = max(carr3_rural)-min(carr3_rural)) 
+  
+  
+   carr_cnty_summ %>% arrange(-range) %>% head(50) %>% kbl(caption = 'Descriptive Statistics of CARR3_rural by County: Descending order by range') %>%
+  kable_classic(full_width = T, html_font = "Cambria") %>%
+   save_kable(., "carr_cnty_summ_03072022.html")
+   #counties with biggest range of values are ( 36061, 32023, 6037,6111, 25025, 6075, 32031, 36081, 36047, 53033, 42101)  
+  
+```
+
+
+
+Look at some maps again.
+
+
+```{r map_variability_pop}
+
+# carr_sf <- readRDS("carr_full_03032022.rds")
+
+### New York
+
+carr_sf %>% 
+  filter(as.numeric(substr(GEOID,1,2)) == 36) %>%
+  filter(pop != 0) %>% 
+  ggplot() +
+  geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = NA) +
+  scale_fill_viridis_c()
+
+    ggsave("NYstate_carr_color.png", width = 6, height = 6, units = "in")
+
+
+    carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 36061) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom = 12) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("newyork_carr_color.png", width = 6, height = 6, units = "in")
+    
+    carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 36081) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm") +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("queenscnty_carr_color.png", width = 6, height = 6, units = "in")
+    
+    carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 36047) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm") +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("kingscnty_carr_color.png", width = 6, height = 6, units = "in")
+
+### Nevada
+
+carr_sf %>% 
+  filter(as.numeric(substr(GEOID,1,2)) == 32) %>%
+  filter(pop != 0) %>% 
+  ggplot() +
+  geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = NA) +
+  scale_fill_viridis_c()
+
+    ggsave("NVstate_carr_color.png", width = 6, height = 6, units = "in")
+
+
+    carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 32023) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom = 9) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("vegas_carr_color.png", width = 6, height = 6, units = "in")
+    
+    carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 32031) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom = 9) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("carsoncity_carr_color.png", width = 6, height = 6, units = "in")
+
+    
+### California
+    
+carr_sf %>% 
+  filter(as.numeric(substr(GEOID,1,2)) == 06) %>%
+  filter(pop != 0) %>% 
+  ggplot() +
+  geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = NA) +
+  scale_fill_viridis_c()
+
+    ggsave("CAstate_carr_color.png", width = 6, height = 6, units = "in")
+
+
+    carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 06037) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom = 9) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("losangeles_carr_color.png", width = 6, height = 6, units = "in")
+    
+    carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 06111) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom = 9) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("santabarbara_carr_color.png", width = 6, height = 6, units = "in")
+    
+    carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 06075) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom = 11) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("sanfran_carr_color.png", width = 6, height = 6, units = "in")
+    
+### Massachusetts
+    
+carr_sf %>% 
+  filter(as.numeric(substr(GEOID,1,2)) == 25) %>%
+  filter(pop != 0) %>% 
+  ggplot() +
+  geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = NA) +
+  scale_fill_viridis_c()
+
+    ggsave("MAstate_carr_color.png", width = 6, height = 6, units = "in")
+
+
+    carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 25025) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom = 12) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("boston_carr_color.png", width = 6, height = 6, units = "in")
+    
+### Washington
+    
+    carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 53033) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom = 9) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("seattle_carr_color.png", width = 6, height = 6, units = "in")
+
+```
+
+
+Maybe we should find some examples of "rural" and "urban" counties and blockgroups as well. I'll pull out locations based on highest and lowest **average** CARR, and based on highest and lowest **max** CARR.
+
+
+```{r carr_extremes}
+
+carr_cnty_summ %>% 
+  arrange(-mean) %>% head(10) %>% kbl(caption = 'Descriptive Statistics of CARR3_rural by County: Descending order by average') %>%
+  kable_classic(full_width = T, html_font = "Cambria") %>%
+   save_kable(., "carr_cnty_summ_ave_03072022.html")
+
+carr_cnty_summ %>% 
+  arrange(-max) %>% head(10) %>% kbl(caption = 'Descriptive Statistics of CARR3_rural by County: Descending order by max') %>%
+  kable_classic(full_width = T, html_font = "Cambria") %>%
+   save_kable(., "carr_cnty_summ_max_03072022.html")
+
+carr_cnty_summ %>% 
+  arrange(min) %>% head(10) %>% kbl(caption = 'Descriptive Statistics of CARR3_rural by County: Ascending order by min') %>%
+  kable_classic(full_width = T, html_font = "Cambria") %>%
+   save_kable(., "carr_cnty_summ_min_03072022.html")
+
+### average high rural areas: states with average highest rural counties are Montana, Nevada, Texas, and North Dakota
+
+carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 32011) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom = 9) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("battlemountain_carr_color.png", width = 6, height = 6, units = "in")
+    
+carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 30019) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm") +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("danielscnty_carr_color.png", width = 6, height = 6, units = "in")
+    
+carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 30071) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm") +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("phillipscnty_carr_color.png", width = 6, height = 6, units = "in")
+    
+carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 48443) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom =10) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("terrellcnty_carr_color.png", width = 6, height = 6, units = "in")
+    
+carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 30091) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom =10) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("sheridancnty_carr_color.png", width = 6, height = 6, units = "in")
+    
+carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 38023) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm", zoom = 10) +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("dividecnty_carr_color.png", width = 6, height = 6, units = "in")
+    
+### most rural areas: states with average highest rural counties are Montana, Nevada, Texas, and Michigan
+
+    
+carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 32023) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm") +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("mostruralcnty1_carr_color.png", width = 6, height = 6, units = "in")
+    
+carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 32015) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm") +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("mostruralcnty2_carr_color.png", width = 6, height = 6, units = "in")
+    
+carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 30105) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm") +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("mostruralcnty3_carr_color.png", width = 6, height = 6, units = "in")
+    
+carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 26083) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm") +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("mostruralcnty4_carr_color.png", width = 6, height = 6, units = "in")
+    
+carr_sf %>% 
+      filter(as.numeric(substr(GEOID,1,5)) == 48043) %>%
+      filter(pop != 0) %>% 
+      ggplot() +
+      annotation_map_tile(type = "osm") +
+      geom_sf(aes(fill = carr3_rural), alpha = 0.6, color = "white") +
+      scale_fill_viridis_c()
+    
+    ggsave("mostruralcnty5_carr_color.png", width = 6, height = 6, units = "in")
+    
+```
+
+
+Let's pull a table of factor and other designation information for these places.
+
+
+```{r extremes_table}
+
+# carr_ru <- readRDS("carr_index_ru_030322.rds")
+
+ex_list <- c(32011, 30019, 30071, 48443, 30091, 38023, 32023, 32015, 30105, 26083, 48043)
+
+carr_ru %>% 
+  filter(as.numeric(substr(GEOID,1,5))  %in% ex_list) %>%
+  filter(pop != 0) %>% 
+  select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, 
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov) %>%
+  arrange(-carr3_rural) %>%
+    kbl(caption = 'Summary of CARR factors and other designations for extreme high rurality') %>% 
+    kable_classic() %>% save_kable(., "carr_ex_rural.html")
+
+
+carr_ru %>% 
+  filter(as.numeric(substr(GEOID,1,5))  %in% ex_list) %>%
+  filter(pop != 0) %>% 
+  select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, 
+         Airports_access, All_Places_of_Worship_access, broadband_access, Cellular_Towers_access,
+         Child_Care_Centers_access, Colleges_and_Universities_access, Electric_Power_Transmission_Lines_access,
+         ElectricSubstations_access, Environmental_Protection_Agency_EPA_Facility_Registry_Service_FRS_Wastewater_Treatment_Plants_access,
+         FDIC_Insured_Banks_access, Fire_Stations_access, Freight_Analysis_Framework_Network_access,
+         Hospitals_access, Emergency_Medical_Service_EMS_Stations_access, Local_Law_Enforcement_Locations_access,
+         Mobile_Home_Parks_access, NCUA_Insured_Credit_Unions_access, Nursing_Homes_access, Power_Plants_access,
+         Private_Schools_access, private_shipping_access, Public_Schools_access, Sand_and_Gravel_Operations_access,
+         Urgent_Care_Facilities_access, Veterans_Health_Administration_Medical_Facilities_access) %>%
+  arrange(-carr3_rural) %>%
+    kbl(caption = 'Summary of CARR factors and access 2 variables for extreme high rurality') %>% 
+    kable_classic() %>% save_kable(., "carr_ex_rural_vars.html")
+
+
+```
+
+
+Hmmm, struggling to pull out much useful thoughts about the factors. Think I'll try doing boxplots of other factors by quintiles of CARR.
+
+
+```{r carr_quint_bps}
+
+features <- carr_ru %>% 
+  st_set_geometry(., NULL) %>% 
+  select(carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed) %>%
+  colnames()
+
+
+
+
+carr_quint <- carr_ru %>%
+  mutate(CARR_quint = as.factor(ntile(carr3_rural, 5))) 
+
+
+bps <- map(features, ~ggplot(data = carr_quint %>% st_set_geometry(., NULL)) +
+        geom_boxplot(aes(x = CARR_quint, y = .data[[.x]]), outlier.size = 0.5, fill = "steelblue", alpha = 0.6)+
+          theme_minimal())
+
+p <- grid.arrange(grobs=bps, ncol=4) 
+
+ggsave("carr_quint_boxplots.png", p, width = 12, height = 12, units = "in")
+
+
+
+pdfs <- map(features, ~ggplot(data = carr_ru %>% st_set_geometry(., NULL)) +
+        geom_density(aes(x = .data[[.x]]), fill = "steelblue", alpha = 0.6)+
+          theme_minimal())
+
+p <- grid.arrange(grobs=pdfs, ncol=4) 
+
+ggsave("carr_pdfs.png", p, width = 12, height = 12, units = "in")
+
+
+```
+
+
+I'll also try some scatter or bar charts of CARR v. factors and variables for extreme CARR cases.
+
+
+```{r carr_ex_charts}
+
+vars <- carr_ru %>% 
+  st_set_geometry(., NULL) %>% 
+  select(carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed,
+         Airports_access, All_Places_of_Worship_access, broadband_access, Cellular_Towers_access,
+         Child_Care_Centers_access, Colleges_and_Universities_access, Electric_Power_Transmission_Lines_access,
+         ElectricSubstations_access, Environmental_Protection_Agency_EPA_Facility_Registry_Service_FRS_Wastewater_Treatment_Plants_access,
+         FDIC_Insured_Banks_access, Fire_Stations_access, Freight_Analysis_Framework_Network_access,
+         Hospitals_access, Emergency_Medical_Service_EMS_Stations_access, Local_Law_Enforcement_Locations_access,
+         Mobile_Home_Parks_access, NCUA_Insured_Credit_Unions_access, Nursing_Homes_access, Power_Plants_access,
+         Private_Schools_access, private_shipping_access, Public_Schools_access, Sand_and_Gravel_Operations_access,
+         Urgent_Care_Facilities_access, Veterans_Health_Administration_Medical_Facilities_access) %>%
+  colnames()
+
+
+
+
+ex_list <- c(32011, 30019, 30071, 48443, 30091, 38023, 32023, 32015, 30105, 26083, 48043)
+
+carr_ex <- carr_ru %>% 
+  filter(as.numeric(substr(GEOID,1,5))  %in% ex_list) %>%
+  filter(pop != 0) 
+
+
+bps <- map(vars, ~ggplot(data = carr_ex %>% st_set_geometry(., NULL)) +
+        geom_col(aes(x = carr3_rural, y = .data[[.x]]), fill = "steelblue", alpha = 0.6)+
+          theme_minimal())
+
+grid.arrange(grobs=bps, ncol=4) 
+
+ggsave("carr_ex_bar.png", width = 12, height = 12, units = "in")
+
+
+```
+
+
+## Add other metric info to CARR data
+
+Great! Now let's add USDA census tract RUCAs, ERS county typology, USDA county rural-urban codes, and census urban area designations to our dataset then summarize CARR by these designations.
+
+
+```{r add_rucas, eval = FALSE}
+
+##### Add USDA RUCAs and US urban designation to index dataset ####
+
+# carr_sf <- st_read("carr_index_0922.shp")
+
+ # st<- us_states(map_date = NULL, 
+ #                   resolution = c("low"), states = NULL) %>% shift_geometry(position="below")
+
+carr_sf <- carr_sf %>%
+ filter(!STATEFP %in% c("02","15")) #drop non-coterminous states  (alaska and hawaii due to data limitations for landuse)
+
+
+rucodes <- read.csv("ruralurbancodes2013.csv") %>% na.omit() %>% 
+  mutate(FIPS = ifelse(FIPS== 46113, 46102, FIPS)) 
+
+ers_typ <- read.csv("ERSCountyTypology2015Edition.csv")
+
+rucas <- read.csv("ruca2010revised.csv") %>% rename(CT_FIPS = State.County.Tract.FIPS.Code..lookup.by.address.at.http...www.ffiec.gov.Geocode..) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS == 51515050100, 51019050100, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS == 6037930401, 6037137000, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  46113940500,46102940500, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  46113940800, 46102940800, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  46113940900, 46102940900, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  4019002701, 4019002704, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  4019002903, 4019002906, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS == 4019410501, 4019004118, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS == 4019410502, 4019004121, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  4019410503, 4019004125, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  4019470400, 4019005200, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  4019470500, 4019005300, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  36053940101, 36053030101, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  36053940102, 36053030102, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  36053940103, 36053030103, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  36053940200, 36053030200, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  36053940300, 36053030300, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  36053940401, 36053030401, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  36053940403, 36053030403, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  36053940600, 36053030600, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  36053940700, 36053030402, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  36065940100, 36065024700, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  36065940000, 36065024800, CT_FIPS)) %>%
+  mutate(CT_FIPS = ifelse(CT_FIPS ==  36065940200, 36065024900, CT_FIPS))
+
+
+far_codes <- read.csv("FARcodesZIPdata2010.csv") #frontier area codes
+
+census_urbanarea <- st_read("tl_2019_us_uac10/tl_2019_us_uac10.shp") %>% st_transform(., st_crs(carr_sf)) %>%
+   shift_geometry(.) %>% st_crop(., st) %>% st_buffer(., -1) #inset polygon a little to avoid postiive st_intersects results for minor sliver overlaps
+
+#spatial join of carr block groups with US census designated urban areas 
+
+  # t<-apply(st_intersects(carr_sf, census_urbanarea, sparse=F),1,any) #testing st_intersects https://stackoverflow.com/questions/55275879/with-sf-selecting-area-features-that-contain-at-least-one-of-a-selection-of-poi
+  # https://stackoverflow.com/questions/55275879/with-sf-selecting-area-features-that-contain-at-least-one-of-a-selection-of-poi
+  
+  is_urban <- carr_sf  %>% mutate(census_ua = ifelse(apply(st_intersects(., census_urbanarea, sparse=F),1,any)==TRUE, "Urban", "Rural")) #create a column saying if a block group intersects a designated urban area, or is rural
+  
+  carr_ru <- is_urban %>% mutate(cntyfips = as.numeric(substr(GEOID,1,5)), ctfips = as.numeric(substr(GEOID, 1, 11))) %>%
+    left_join(., rucodes %>% dplyr::select(FIPS, RUCC_2013), by=c("cntyfips"="FIPS")) %>%
+    left_join(., rucas %>%  dplyr::select(CT_FIPS, Primary.RUCA.Code.2010), by=c("ctfips"="CT_FIPS")) %>%
+    left_join(., ers_typ %>% dplyr::select(FIPStxt,Non.Overlapping.Economic.Types..Type_2015_Update:Persistent_Related_Child_Poverty_2013), by = c("cntyfips"="FIPStxt")) 
+    
+
+  carr_ru <- carr_ru %>% rename(RUCA_2010 = Primary.RUCA.Code.2010, 
+                                Econ_type = Non.Overlapping.Economic.Types..Type_2015_Update,
+                                Farm_type = Farming_2015_Update..allows.overlap..1.yes.,
+                                Mine_type = Mining_2015.Update..allows.overlap..1.yes.,
+                                Manuf_type = Manufacturing_2015_Update..allows.overlap..1.yes.,
+                                Govn_type =  Government_2015_Update..allows.overlap..1.yes.,
+                                Rec_type = Recreation_2015_Update..allows.overlap..1.yes.,
+                                Nonspec_type = Nonspecialized_2015_Update..allows.overlap..1.yes.,
+                                Low_ed = Low_Education_2015_Update,
+                                Low_emp = Low_Employment_Cnty_2008_2012_25_64,
+                                Pop_loss = Pop_Loss_2010,
+                                Retire = Retirement_Dest_2015_Update,
+                                Pers_pov = Persistent_Poverty_2013,
+                                Child_pov = Persistent_Related_Child_Poverty_2013)
+
+# if(!file.exists("carr_index_ru_030922.shp")){
+#   car_ru_shp <- carr_ru %>% 
+#     dplyr::select(GEOID, STATEFP, pop_density:Child_pov) %>% 
+#     st_write(., "carr_index_ru_030922.shp", append=FALSE)
+# }
+  
+if(!file.exists("carr_index_ru_030922.rds")){
+   carr_ru %>% 
+    saveRDS(., "carr_index_ru_030922.rds")
+}
+  
+# if(!file.exists("carr_ru_030322.csv")){
+#   car_ru_csv <- carr_ru %>% 
+#     dplyr::select(GEOID, STATEFP, pop_density:Child_pov) %>% 
+#     st_set_geometry(NULL)  %>% 
+#     write.csv("carr_ru_030322.csv")
+# }
+
+
+#calculate the area of intersection with census urban areas
+  
+carr_boundaries <- carr_ru %>% dplyr::select(GEOID)
+
+area_urban <- st_intersection(carr_boundaries, st_geometry(census_urbanarea))
+
+area_urban_bg <- area_urban %>%
+  mutate(ua = st_area(.)) %>%
+  group_by(GEOID) %>%
+  summarise(urban_area = sum(ua))
+
+
+carr_ru_ia <- carr_ru %>%
+  left_join(., area_urban_bg %>% st_set_geometry(NULL), by = "GEOID") %>%
+  mutate(bg_area = st_area(.),
+         perc_urban = urban_area/bg_area*100)
+
+saveRDS(carr_ru_ia,"carr_with_percurban.rds")
+  
+```  
+
+
+Here are plots describing the overlap between CARR and census, RUCC and RUCA.
+  
+```{r summ_car_by_ur}  
+ 
+
+# carr_ru <- readRDS("carr_index_ru_030922.rds")
+
+  ### Get summaries of CARR by urban-rural designations
+
+##CENSUS##
+  carr_ua_summ <- carr_ru %>%
+  filter(pop != 0) %>% group_by(census_ua) %>% 
+    summarise(mean = mean(carr3_rural, na.rm=T), stdev = sd(carr3_rural, na.rm=T), 
+              min = min(carr3_rural, na.rm=T), max = max(carr3_rural, na.rm=T), 
+              range = max(carr3_rural, na.rm=T)-min(carr3_rural, na.rm=T)) 
+  
+  carr_ua_summ %>% st_set_geometry(NULL) %>% 
+    kbl(caption = 'Summary of CARR by US Census designated "Urban" and corresponding "rural" areas') %>% 
+    kable_classic() %>% save_kable(., "CARR_by_census_ua.html")
+  
+  #violin plot
+  ggplot() + geom_violin(data=carr_ru, 
+                         aes(x=census_ua, y=carr3_rural, fill=census_ua), 
+                          alpha = 0.5) +
+    scale_fill_manual(values = c("#d8b365","#5ab4ac")) +
+    theme_minimal() +
+    xlab("Census Designation") + ylab("CARR") +
+     theme(legend.title=element_blank(), legend.position = "bottom")
+  
+  ggsave("carr_by_ua_violin.png")
+  
+  #boxplot
+  ggplot() + geom_boxplot(data=carr_ru, aes(x=census_ua, y=carr3_rural, fill=census_ua), 
+                         outlier.size = 0.5, alpha = 0.7) +
+    scale_fill_manual(values = c("#d8b365","#5ab4ac")) + #colors from color brewer 3 class diverging BrBG
+    theme_minimal() +
+    xlab("CARR") + ylab("Census Designation") +
+     theme(legend.title=element_blank(), legend.position = "bottom")
+  
+  ggsave("carr_by_ua_boxplot.png")
+  
+  #histogram
+  ggplot() + geom_histogram(data=carr_ru, aes(x=carr3_rural, fill=fct_rev(census_ua), alpha = 0.5),  
+                              color = "white", position = "stack") +
+    scale_fill_manual(values = c("#d8b365","#5ab4ac")) +
+    theme_minimal() +
+    xlab("CARR") + ylab("Census Designation") +
+     theme(legend.title=element_blank(), legend.position = "bottom")
+  
+  ggsave("carr_by_us_histogram.png")
+  
+  #density with boxplot
+  library(ggstance)
+  options(scipen = 999)
+   my_xlab <- paste(levels(as.factor(carr_ru$census_ua)),"\nn=",table(carr_ru$census_ua),sep="") #add  N labels
+  ggplot() + geom_density(data=carr_ru, aes(x=carr3_rural, fill=fct_rev(census_ua), stat(count),  
+                            alpha = 0.5,  color = "white"),  color = "white") +
+    scale_fill_manual(values = c("#d8b365","#5ab4ac"), labels=my_xlab) +
+    guides(alpha="none") +
+    theme_minimal() +
+    xlab("CARR") + ylab("Count") +
+    theme(legend.title=element_blank(), legend.position = "bottom", axis.text.x = element_text(size = 8))+
+    geom_boxploth(data=carr_ru, aes(y=100000, x=carr3_rural, fill=fct_rev(census_ua)), 
+                  width=150000, outlier.alpha = 0)
+  
+  ggsave("carr_by_ua_density_boxplot.jpeg", device="jpeg", width = 6, height = 6, units = "in") #like this one for paper
+ 
+ ##RUCC##  
+  carr_rucc_summ <- carr_ru %>%
+  filter(pop != 0) %>% group_by(RUCC_2013) %>% 
+    summarise(mean = mean(carr3_rural, na.rm=T), stdev = sd(carr3_rural, na.rm=T), 
+              min = min(carr3_rural, na.rm=T), max = max(carr3_rural, na.rm=T), 
+              range = max(carr3_rural, na.rm=T)-min(carr3_rural, na.rm=T)) 
+  
+  carr_rucc_summ %>% st_set_geometry(NULL) %>% 
+    kbl(caption = 'Summary of CARR by USDA Rural-Urban Continuum Codes') %>% 
+    kable_classic() %>% save_kable(., "CARR_by_RUCC.html")
+ 
+  
+  #violin plot
+  my_xlab <- paste(levels(as.factor(carr_ru$RUCC_2013)),"\nn=",table(carr_ru$RUCC_2013),sep="") #add  N labels https://r-graph-gallery.com/266-ggplot2-boxplot-with-variable-width.html
+  
+  ggplot() + geom_violin(data=carr_ru %>% mutate(RUCC_2013 = as.factor(RUCC_2013)), 
+                         aes(x=RUCC_2013, y=carr3_rural, fill=RUCC_2013), alpha = 0.5) +
+    scale_fill_brewer(palette = "BrBG") + 
+    theme_minimal() +
+    xlab("RUCC Class") + ylab("CARR") +
+    theme(legend.title=element_blank(), legend.position = "bottom", axis.text.x = element_text(size = 8))+
+    scale_x_discrete(labels=my_xlab) 
+  
+    ggsave("carr_by_rucc_violin.jpeg", device="jpeg", width = 6, height = 6, units = "in")#like this one for paper
+    
+    #boxplot 
+    
+    my_xlab <- paste(levels(as.factor(carr_ru$RUCC_2013)),"\nn=",table(carr_ru$RUCC_2013),sep="") #add variable widths and N lables https://r-graph-gallery.com/266-ggplot2-boxplot-with-variable-width.html
+    
+    ggplot() + geom_boxplot(data=carr_ru %>% mutate(RUCC_2013 = as.factor(RUCC_2013)), 
+                            aes(x=RUCC_2013, y=carr3_rural, fill=RUCC_2013), 
+                          outlier.size = 0.5, alpha = 0.7, varwidth=TRUE) +
+    scale_fill_brewer(palette = "BrBG") + #colors from color brewer 3 class diverging BrBG
+    theme_minimal() +
+    xlab("RUCC Class") + ylab("CARR") +
+     theme(legend.title=element_blank(), legend.position = "bottom", axis.text.x = element_text(size = 10))+
+    scale_x_discrete(labels=my_xlab, position = "bottom") 
+    
+    ggsave("carr_by_rucc_boxplot_new.jpeg", device="jpeg", width = 6, height = 6, units = "in")
+    
+    #density with boxplot
+    ggplot() + geom_density(data=carr_ru %>% mutate(RUCC_2013 = as.factor(RUCC_2013)), 
+                             aes(x=carr3_rural, fill=RUCC_2013, stat(count),  
+                            alpha = 0.5,  color = "white"),  color = "white") +
+   scale_fill_brewer(palette = "BrBG") +
+    guides(alpha="none") +
+    theme_minimal() +
+    xlab("CARR") + ylab("Count") +
+     theme(legend.title=element_blank(), legend.position = "bottom") + 
+    geom_boxploth(data=carr_ru %>% mutate(RUCC_2013 = as.factor(RUCC_2013)), 
+                  aes(y=-100000, x=carr3_rural, fill=RUCC_2013), 
+                  width=150000, outlier.alpha = 0)
+    ggsave("carr_by_rucc_densityboxplot.jpeg", device="jpeg", width = 6, height = 6, units = "in")
+
+    #faceted density
+  
+  ggplot() + geom_density(data=carr_ru %>% mutate(RUCC_2013 = as.factor(RUCC_2013)) %>% 
+                            group_by(RUCC_2013)  %>% tally() %>% ungroup() %>% st_set_geometry (NULL), 
+                          aes(x=carr3_rural, fill=RUCC_2013, stat(count)),  alpha = 0.5, color = "white") + 
+    geom_boxploth(data=carr_ru %>% mutate(RUCC_2013 = as.factor(RUCC_2013)), 
+                  aes(y=-1000, x=carr3_rural, fill=RUCC_2013, weight = n), varwidth = TRUE,  outlier.alpha = 0) +
+    scale_fill_brewer(palette = "BrBG") +
+    facet_wrap(vars(RUCC_2013), ncol = 1, scales = "free_y")+
+    guides(alpha="none") +
+    theme_minimal() +
+    xlab("CARR") + ylab("Count") +
+     theme(legend.title=element_blank(), legend.position = "bottom") 
+    
+  ggsave("carr_by_RUCC_density_facet.jpeg", device="jpeg", width = 6, height = 6, units = "in")
+ 
+  
+##RUCA##     
+  carr_ruca_summ <- carr_ru %>%
+  filter(pop != 0) %>% group_by(RUCA_2010) %>% 
+    summarise(mean = mean(carr3_rural, na.rm=T), stdev = sd(carr3_rural, na.rm=T), 
+              min = min(carr3_rural, na.rm=T), max = max(carr3_rural, na.rm=T), 
+              range = max(carr3_rural, na.rm=T)-min(carr3_rural, na.rm=T)) 
+  
+  carr_ruca_summ %>% st_set_geometry(NULL) %>% 
+    kbl(caption = 'Summary of CARR by USDA Rural-Urban Commuter Codes') %>% 
+    kable_classic() %>% save_kable(., "CARR_by_RUCA.html")
+ 
+   
+ 
+      #violin plot
+  my_xlab <- paste(levels(as.factor(carr_ru$RUCA_2010)),"\nn=",table(carr_ru$RUCA_2010),sep="") #add  N labels https://r-graph-gallery.com/266-ggplot2-boxplot-with-variable-width.html
+  ggplot() + geom_violin(data=carr_ru %>% mutate(RUCA_2010 = as.factor(RUCA_2010)), 
+                         aes(x=RUCA_2010, y=carr3_rural, fill=RUCA_2010), alpha = 0.5) +
+    scale_fill_brewer(palette = "BrBG") + 
+    theme_minimal() +
+    xlab("RUCA Class") + ylab("CARR") +
+     theme(legend.title=element_blank(), legend.position = "bottom", axis.text.x = element_text(size = 8))+
+    scale_x_discrete(labels=my_xlab) 
+  
+    ggsave("carr_by_ruca_violin.jpeg", device="jpeg", width = 6, height = 6, units = "in")#like this one for paper
+    
+    #boxplot 
+    ggplot() + geom_boxplot(data=carr_ru %>% mutate(RUCA_2010 = as.factor(RUCA_2010)), 
+                            aes(x=RUCA_2010, y=carr3_rural, fill=RUCA_2010), 
+                          outlier.size = 0.5, alpha = 0.7) +
+    scale_fill_brewer(palette = "BrBG") + #colors from color brewer 3 class diverging BrBG
+    theme_minimal() +
+    xlab("CARR") + ylab("RUCA Class") +
+     theme(legend.title=element_blank(), legend.position = "bottom")
+    
+    ggsave("carr_by_RUCA_boxplot.png")
+    
+    #density with boxplot
+    ggplot() + geom_density(data=carr_ru %>% mutate(RUCA_2010 = as.factor(RUCA_2010)), 
+                             aes(x=carr3_rural, fill=RUCA_2010, stat(count),  
+                            alpha = 0.5,  color = "white"),  color = "white") +
+   scale_fill_brewer(palette = "BrBG") +
+    guides(alpha="none") +
+    theme_minimal() +
+    xlab("CARR") + ylab("Count") +
+     theme(legend.title=element_blank(), legend.position = "bottom") + 
+    geom_boxploth(data=carr_ru %>% mutate(RUCA_2010 = as.factor(RUCA_2010)), 
+                  aes(y=-120000, x=carr3_rural, fill=RUCA_2010), 
+                  width=200000, outlier.alpha = 0)
+    ggsave("carr_by_RUCA_densityboxplot.jpeg", device="jpeg", width = 6, height = 6, units = "in")
+
+    #faceted density
+  ggplot() + geom_density(data=carr_ru %>% mutate(RUCA_2010 = as.factor(RUCA_2010)), 
+                          aes(x=carr3_rural, fill=RUCA_2010, stat(count)),  alpha = 0.5, color = "white") +
+    scale_fill_brewer(palette = "BrBG") +
+    facet_wrap(vars(RUCA_2010))+
+    guides(alpha="none") +
+    theme_minimal() +
+    xlab("CARR") + ylab("Count") +
+     theme(legend.title=element_blank(), legend.position = "bottom") 
+    
+  ggsave("carr_by_RUCA_density_facet.jpeg", device="jpeg", width = 6, height = 6, units = "in")
+    
+``` 
+  
+
+## What the NA?
+
+Investigation of the NAs in the first round of RUCC and RUCA plots.
+  
+```{r ruca_nas, eval = FALSE}
+  
+#Alaska and Hawaii are already dropped
+
+  glimpse(rucodes)
+  na_check <- rucodes  %>% summarise_all(funs(sum(is.na(.))))
+  na_check
+  
+  glimpse(rucas)
+  na_check <- rucas  %>% summarise_all(funs(sum(is.na(.))))
+  na_check
+  
+ 
+  na_check <- carr_ru  %>% dplyr::select(RUCA_2010) %>% summarise(sum(is.na(.)))
+  na_check #68 nas
+  
+  na_check1 <- carr_ru  %>% filter(is.na(RUCA_2010))
+  na_check2 <- carr_ru  %>% filter(is.na(RUCC_2013))
+```
+  
+  
+So at least some of the rucode NAs are in the original dataset. Removed these and rebuilt the `carr_ru` dataset. NAs in the rucas are not coming from the original dataset. These may be happening because the block groups are 2018 edition while the RUCA census tracts are from 2010. May need to do a spatial join of the 2010 census tracts and 2018 block groups for this. 
+
+[County code change](https://www.census.gov/programs-surveys/geography/technical-documentation/county-changes.2010.html) from 46113 to 46102 responsible for NAs in RUCCs. Go back and modify this in `rucodes`. 
+
+Same issue with RUCA census tracts. [Also](https://www.cdc.gov/nchs/data/data_acces_files/County-Geography.pdf) FIPS for county 51515 in `rucas` should be changed to 51019. (51515050100 to 51019050100 census tract fips change.) FIPS for county 46113 in `rucas` also needs to be changed to 46102 (46113940500 to 46102940500, 	
+46113940800 to 46102940800, and 46113940900 to 46102940900).
+
+Also 6037930401 in `rucas` should be changed to 	
+[6037137000](https://www.census.gov/programs-surveys/acs/technical-documentation/table-and-geography-changes/2012/geography-changes.html), 4019002701 to 4019002704, 4019002903 to 4019002906, 4019410501 to 4019004118, 4019410502 to 4019004121, 4019410503 to 4019004125, 4019470400 to 4019005200, 4019470500 to 4019005300.
+
+[Also](https://www.census.gov/programs-surveys/acs/technical-documentation/table-and-geography-changes/2011/geography-changes.html) 36053940101 in `rucas`should be changed to 36053030101, 36053940102 to 36053030102, 36053940103 to 36053030103, 36053940200 to 36053030200, 36053940300 to 36053030300, 36053940401 to 36053030401, 36053940403 to 36053030403, 36053940600 to 36053030600, and 36053940700 to 36053030402. And 36065940100 should be changed to 36065024700, 36065940000 to 36065024800, and 36065940200 to 36065024900.
+
+Go back and modify in `rucas`.
+
+***All fixed now. KN: 01072022***
+
+
+## Constrasting cases
+
+- Find locations where CARR varies the most from RUCA, RUCC, and census designation. Pull up the data and compare.
+
+
+
+I'll start by pulling up information for areas designated as urban but with high CARR scores or that are rural with low CARR scores.
+
+```{r urban_carr_comp}  
+ 
+
+# carr_ru <- readRDS("carr_index_ru_030922.rds")
+
+fac_vars <- c("Agricultural_Minerals_Operations_avail","broadband_avail","Child_Care_Centers_avail", "clinic_avail",
+              "Colleges_and_Universities_avail","dentist_avail","FDIC_Insured_Banks_avail", "fitness_centre_avail" ,
+              "hotel_avail", "library_avail", "museum_avail", "NCUA_Insured_Credit_Unions_avail", "optician_avail",
+              "park_avail","pharmacy_avail", "post_office_avail","Private_Schools_avail", "Public_Schools_avail",
+              "restaurant_avail","sports_centre_avail", "supermarket_avail", "theatre_avail",
+              
+              "arts_centre_access","cinema_access", "clinic_access","community_centre_access","dentist_access",
+              "department_store_access", "doityourself_access", "fitness_centre_access", "fuel_access", "hardware_access",
+              "hotel_access", "Intermodal_Freight_Facilities___Air__to_Truck_access","library_access","museum_access",
+              "nature_reserve_access","optician_access", "park_access", "pharmacy_access", "playground_access",
+              "post_office_access", "restaurant_access","sports_centre_access","supermarket_access","swimming_pool_access",
+              "theatre_access", "water_park_access",
+              
+               "Airports_access", "All_Places_of_Worship_access", "broadband_access", "Cellular_Towers_access",
+         "Child_Care_Centers_access", "Colleges_and_Universities_access", "Electric_Power_Transmission_Lines_access",
+         "ElectricSubstations_access","Environmental_Protection_Agency_EPA_Facility_Registry_Service_FRS_Wastewater_Treatment_Plants_access","FDIC_Insured_Banks_access", "Fire_Stations_access", "Freight_Analysis_Framework_Network_access",
+         "Hospitals_access", "Emergency_Medical_Service_EMS_Stations_access", "Local_Law_Enforcement_Locations_access",
+         "Mobile_Home_Parks_access", "NCUA_Insured_Credit_Unions_access", "Nursing_Homes_access", "Power_Plants_access",
+         "Private_Schools_access", "private_shipping_access", "Public_Schools_access", "Sand_and_Gravel_Operations_access",
+        "Urgent_Care_Facilities_access", "Veterans_Health_Administration_Medical_Facilities_access",
+       
+        "Agricultural_Minerals_Operations_access", "arts_centre_access","Biodiesel_Plants_access", "Colleges_and_Universities_access", "Construction_Minerals_Operations_access", "dentist_access", "Ethanol_Transloading_Facilities_access", "Ethanol_Transloading_Facilities_access", "hardware_access","Hydrocarbon_Gas_Liquid_Pipelines_access", "Intermodal_Freight_Facilities%3A_Marine_Roll_on_Roll_off_access", "Intermodal_Freight_Facilities___Air__to_Truck_access",
+      "Intermodal_Freight_Facilities_RailTOFCCOFC_access", "Major_State_Government_Buildings_access","Mines_and_Mineral_Resources_access" , "Natural_Gas_Processing_Plants_access",
+      "nature_reserve_access","optician_access", "park_access", "playground_access", "Port_Facilities_access", "Power_Plants_access","Private_Schools_access","private_shipping_access","restaurant_access","Sand_and_Gravel_Operations_access","supermarket_access","swimming_pool_access", "theatre_access","Urgent_Care_Facilities_access", "Veterans_Health_Administration_Medical_Facilities_access", "water_park_access" )
+ 
+  
+  carr_ru %>% 
+  filter(census_ua == "Urban") %>%
+  filter(pop != 0) %>% 
+  select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, 
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov, 
+         all_of(fac_vars)) %>%
+    mutate_at(vars(pop, pop_density, Dist_to_metro, perc_developed, all_of(fac_vars)), ~scale(.)) %>%
+  arrange(-carr3_rural) %>%
+  head(., 20) %>%
+    kbl(caption = 'Summary of CARR factors and variables for urban designated places with highest CARR scores') %>% 
+    kable_classic() %>% save_kable(., "urban_carr_high2.html")
+  
+  carr_ru_ia <- readRDS("carr_with_percurban.rds")
+  
+  carr_ru_ia %>% 
+  filter(census_ua == "Urban") %>%
+  filter(pop != 0) %>% 
+  select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, perc_urban,
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov, perc_urban,
+         all_of(fac_vars)) %>%
+    mutate_at(vars(pop, pop_density, Dist_to_metro, perc_developed, all_of(fac_vars)), ~scale(.)) %>%
+    mutate(perc_urban = as.numeric(perc_urban)) %>%
+  filter(perc_urban >= 80) %>%
+     arrange(-carr3_rural) %>% 
+    head(., 200) %>%
+    kbl(caption = 'Summary of CARR factors and variables for urban designated places with highest CARR scores and high percent urban area') %>% 
+    kable_classic() %>% save_kable(., "urban_carr_high_urbanarea.html")
+  
+  carr_ru %>% 
+  filter(census_ua == "Rural") %>%
+  filter(pop != 0) %>% 
+  select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, 
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov,
+         all_of(fac_vars)) %>%
+    mutate_at(vars(pop, pop_density, Dist_to_metro, perc_developed, all_of(fac_vars)), ~scale(.)) %>%
+  arrange(carr3_rural) %>%
+  head(., 10) %>%
+    kbl(caption = 'Summary of CARR factors and variables for rural designated places with lowest CARR scores') %>% 
+    kable_classic() %>% save_kable(., "rural_carr_low2.html")
+
+#get descriptive stats for CARR for urban places with more than 50% urban area
+  carr_ru_ia %>% 
+  filter(census_ua == "Urban") %>%
+  filter(pop != 0) %>% 
+  select(carr3_rural, perc_urban) %>%
+    mutate(perc_urban = as.numeric(perc_urban)) %>%
+  filter(perc_urban > 50) %>%
+    st_set_geometry(NULL) %>%
+     summarise(average_carr = mean(carr3_rural), sd_carr = sd(carr3_rural),
+               min_carr = min(carr3_rural), max_carr = max(carr3_rural)) %>% 
+    kbl(caption = 'CARR descriptives for majority urban areas') %>% 
+    kable_classic() 
+  
+```
+
+
+Let's make some quick maps of these contrasting cases.
+
+```{r, eval = FALSE }
+
+urban_list <- c(320150003003, 300859400022, 483779502001, 301051001002, 320339702003, 301059406001, 320130105003, 483779502003, 300859400023, 483779502002)
+
+carr_urban <- carr_ru %>% 
+  filter(as.numeric(GEOID)  %in% urban_list) 
+
+
+urban_maps <- map(urban_list, ~ carr_urban %>% 
+             filter(GEOID == .x) %>%
+             ggplot() +
+             annotation_map_tile()+
+            geom_sf(aes(), fill = NA) +
+            ggtitle (paste0(.x))+
+            theme(axis.text = element_blank())
+             )
+
+p <- grid.arrange(grobs=urban_maps, ncol=2) 
+
+ggsave("urban_carr_high.png",p, width = 12, height = 24, units = "in")
+
+
+rural_list <- c(181199558003, 181199558004, 391439610002, 261614229001, 530670126202, 540659708003, 080130136013, 260210113006, 261158337001, 390059711002)
+
+carr_rural <- carr_ru %>% 
+  filter(as.numeric(GEOID)  %in% rural_list) 
+
+
+rural_maps <- map(rural_list, ~ carr_rural %>% 
+             filter(GEOID == .x) %>%
+             ggplot() +
+             annotation_map_tile()+
+            geom_sf(aes(), fill = NA) +
+            ggtitle (paste0(.x))+
+            theme(axis.text = element_blank())
+             )
+
+p <- grid.arrange(grobs=rural_maps, ncol=2) 
+
+ggsave("rural_carr_low.png", p, width = 12, height = 24, units = "in")
+
+```
+
+
+Now we'll look at counties with either a 1 or 2 RUCC code (most urban classes) but with high CARR scores or with a 9 or 10 (most rural) RUCC code and low CARR scores.
+
+```{r rucc_carr_comp}  
+ 
+
+# carr_ru <- readRDS("carr_index_ru_030322.rds")
+
+fac_vars <- c("Agricultural_Minerals_Operations_avail","broadband_avail","Child_Care_Centers_avail", "clinic_avail",
+              "Colleges_and_Universities_avail","dentist_avail","FDIC_Insured_Banks_avail", "fitness_centre_avail" ,
+              "hotel_avail", "library_avail", "museum_avail", "NCUA_Insured_Credit_Unions_avail", "optician_avail",
+              "park_avail","pharmacy_avail", "post_office_avail","Private_Schools_avail", "Public_Schools_avail",
+              "restaurant_avail","sports_centre_avail", "supermarket_avail", "theatre_avail",
+              
+              "arts_centre_access","cinema_access", "clinic_access","community_centre_access","dentist_access",
+              "department_store_access", "doityourself_access", "fitness_centre_access", "fuel_access", "hardware_access",
+              "hotel_access", "Intermodal_Freight_Facilities___Air__to_Truck_access","library_access","museum_access",
+              "nature_reserve_access","optician_access", "park_access", "pharmacy_access", "playground_access",
+              "post_office_access", "restaurant_access","sports_centre_access","supermarket_access","swimming_pool_access",
+              "theatre_access", "water_park_access",
+              
+               "Airports_access", "All_Places_of_Worship_access", "broadband_access", "Cellular_Towers_access",
+         "Child_Care_Centers_access", "Colleges_and_Universities_access", "Electric_Power_Transmission_Lines_access",
+         "ElectricSubstations_access","Environmental_Protection_Agency_EPA_Facility_Registry_Service_FRS_Wastewater_Treatment_Plants_access","FDIC_Insured_Banks_access", "Fire_Stations_access", "Freight_Analysis_Framework_Network_access",
+         "Hospitals_access", "Emergency_Medical_Service_EMS_Stations_access", "Local_Law_Enforcement_Locations_access",
+         "Mobile_Home_Parks_access", "NCUA_Insured_Credit_Unions_access", "Nursing_Homes_access", "Power_Plants_access",
+         "Private_Schools_access", "private_shipping_access", "Public_Schools_access", "Sand_and_Gravel_Operations_access",
+        "Urgent_Care_Facilities_access", "Veterans_Health_Administration_Medical_Facilities_access",
+       
+        "Agricultural_Minerals_Operations_access", "arts_centre_access","Biodiesel_Plants_access", "Colleges_and_Universities_access", "Construction_Minerals_Operations_access", "dentist_access", "Ethanol_Transloading_Facilities_access", "Ethanol_Transloading_Facilities_access", "hardware_access","Hydrocarbon_Gas_Liquid_Pipelines_access", "Intermodal_Freight_Facilities%3A_Marine_Roll_on_Roll_off_access", "Intermodal_Freight_Facilities___Air__to_Truck_access",
+      "Intermodal_Freight_Facilities_RailTOFCCOFC_access", "Major_State_Government_Buildings_access","Mines_and_Mineral_Resources_access" , "Natural_Gas_Processing_Plants_access",
+      "nature_reserve_access","optician_access", "park_access", "playground_access", "Port_Facilities_access", "Power_Plants_access","Private_Schools_access","private_shipping_access","restaurant_access","Sand_and_Gravel_Operations_access","supermarket_access","swimming_pool_access", "theatre_access","Urgent_Care_Facilities_access", "Veterans_Health_Administration_Medical_Facilities_access", "water_park_access" )
+ 
+  
+  carr_ru %>% 
+  filter(RUCC_2013 == 1 | RUCC_2013 == 2) %>%
+  filter(pop != 0) %>% 
+  select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, 
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov,
+         all_of(fac_vars)) %>%
+    mutate_at(vars(pop, pop_density, Dist_to_metro, perc_developed, all_of(fac_vars)), ~scale(.)) %>%
+  arrange(-carr3_rural) %>%
+  head(., 10) %>%
+    kbl(caption = 'Summary of CARR factors and variables for RUCC 1 or 2 (urban) counties with highest CARR scores') %>% 
+    kable_classic() %>% save_kable(., "urbanRUCC_carr_high2.html")
+  
+    carr_ru %>% 
+  filter(RUCC_2013 == 1 | RUCC_2013 == 2) %>%
+  filter(pop != 0) %>% 
+  select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, 
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov,
+         all_of(fac_vars)) %>%
+  arrange(-carr3_rural) %>%
+  head(., 10) %>%
+    kbl(caption = 'Summary of CARR factors and variables for RUCC 1 or 2 (urban) counties with highest CARR scores not scaled') %>% 
+    kable_classic() %>% save_kable(., "urbanRUCC_carr_high_noscale.html")
+    
+  
+  carr_ru %>% 
+  filter(RUCC_2013 == 9 | RUCC_2013 == 10) %>%
+  filter(pop != 0) %>% 
+  select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, 
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov,
+         all_of(fac_vars)) %>%
+    mutate_at(vars(pop, pop_density, Dist_to_metro, perc_developed, all_of(fac_vars)), ~scale(.)) %>%
+  arrange(carr3_rural) %>%
+  head(., 10) %>%
+    kbl(caption = 'Summary of CARR factors and variables for RUCC 9 or 10 (rural) counties with lowest CARR scores') %>% 
+    kable_classic() %>% save_kable(., "ruralRUCC_carr_low2.html")
+
+  carr_ru %>% 
+  filter(RUCC_2013 == 9 | RUCC_2013 == 10) %>%
+  filter(pop != 0) %>% 
+  select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, 
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov,
+         all_of(fac_vars)) %>%
+  arrange(carr3_rural) %>%
+  head(., 10) %>%
+    kbl(caption = 'Summary of CARR factors and variables for RUCC 9 or 10 (rural) counties with lowest CARR scores not scaled') %>% 
+    kable_classic() %>% save_kable(., "ruralRUCC_carr_low_noscale.html")
+
+```
+
+
+Let's make some quick maps of these contrasting cases by RUCC.
+
+```{r , eval = FALSE}
+
+urban_list <- c(061119800001, 160739502003, 160739502005, 320310035011, 060375991001, 490039601003, 490451306003, 490230102001, 160739502004, 040199407001)
+
+carr_urban <- carr_ru %>% 
+  filter(as.numeric(GEOID)  %in% urban_list) 
+
+
+urban_maps <- map(urban_list, ~ carr_urban %>% 
+             filter(GEOID == .x) %>%
+             ggplot() +
+             annotation_map_tile(zoom )+
+            geom_sf(aes(), fill = NA) +
+            ggtitle (paste0(.x))+
+              theme(axis.text = element_blank())
+             )
+
+grid.arrange(grobs=urban_maps, ncol=2) 
+
+ggsave("urbanRUCC_carr_high.png", width = 12, height = 24, units = "in")
+
+
+rural_list <- c(530559604002, 530559604003, 530559604001, 530559605002, 530559605001, 511030303002, 530559603003, 530559601004, 511030302003, 530559601002)
+
+carr_rural <- carr_ru %>% 
+  filter(as.numeric(GEOID)  %in% rural_list) 
+
+
+rural_maps <- map(rural_list, ~ carr_rural %>% 
+             filter(GEOID == .x) %>%
+             ggplot() +
+             annotation_map_tile(zoom)+
+            geom_sf(aes(), fill = NA) +
+            ggtitle (paste0(.x))+
+              theme(axis.text = element_blank())
+             )
+
+grid.arrange(grobs=rural_maps, ncol=2) 
+
+ggsave("ruralRUCC_carr_low.png", width = 12, height = 24, units = "in")
+
+```
+
+
+Finally we'll look at census tracts with either a 1 or 2 RUCA code (most urban classes) but with high CARR scores or with a 9 or 10 (most rural) RUCA code and low CARR scores.
+
+```{r ruca_carr_comp}  
+ 
+
+# carr_ru <- readRDS("carr_index_ru_030322.rds")
+
+fac_vars <- c("Agricultural_Minerals_Operations_avail","broadband_avail","Child_Care_Centers_avail", "clinic_avail",
+              "Colleges_and_Universities_avail","dentist_avail","FDIC_Insured_Banks_avail", "fitness_centre_avail" ,
+              "hotel_avail", "library_avail", "museum_avail", "NCUA_Insured_Credit_Unions_avail", "optician_avail",
+              "park_avail","pharmacy_avail", "post_office_avail","Private_Schools_avail", "Public_Schools_avail",
+              "restaurant_avail","sports_centre_avail", "supermarket_avail", "theatre_avail",
+              
+              "arts_centre_access","cinema_access", "clinic_access","community_centre_access","dentist_access",
+              "department_store_access", "doityourself_access", "fitness_centre_access", "fuel_access", "hardware_access",
+              "hotel_access", "Intermodal_Freight_Facilities___Air__to_Truck_access","library_access","museum_access",
+              "nature_reserve_access","optician_access", "park_access", "pharmacy_access", "playground_access",
+              "post_office_access", "restaurant_access","sports_centre_access","supermarket_access","swimming_pool_access",
+              "theatre_access", "water_park_access",
+              
+               "Airports_access", "All_Places_of_Worship_access", "broadband_access", "Cellular_Towers_access",
+         "Child_Care_Centers_access", "Colleges_and_Universities_access", "Electric_Power_Transmission_Lines_access",
+         "ElectricSubstations_access","Environmental_Protection_Agency_EPA_Facility_Registry_Service_FRS_Wastewater_Treatment_Plants_access","FDIC_Insured_Banks_access", "Fire_Stations_access", "Freight_Analysis_Framework_Network_access",
+         "Hospitals_access", "Emergency_Medical_Service_EMS_Stations_access", "Local_Law_Enforcement_Locations_access",
+         "Mobile_Home_Parks_access", "NCUA_Insured_Credit_Unions_access", "Nursing_Homes_access", "Power_Plants_access",
+         "Private_Schools_access", "private_shipping_access", "Public_Schools_access", "Sand_and_Gravel_Operations_access",
+        "Urgent_Care_Facilities_access", "Veterans_Health_Administration_Medical_Facilities_access",
+       
+        "Agricultural_Minerals_Operations_access", "arts_centre_access","Biodiesel_Plants_access", "Colleges_and_Universities_access", "Construction_Minerals_Operations_access", "dentist_access", "Ethanol_Transloading_Facilities_access", "Ethanol_Transloading_Facilities_access", "hardware_access","Hydrocarbon_Gas_Liquid_Pipelines_access", "Intermodal_Freight_Facilities%3A_Marine_Roll_on_Roll_off_access", "Intermodal_Freight_Facilities___Air__to_Truck_access",
+      "Intermodal_Freight_Facilities_RailTOFCCOFC_access", "Major_State_Government_Buildings_access","Mines_and_Mineral_Resources_access" , "Natural_Gas_Processing_Plants_access",
+      "nature_reserve_access","optician_access", "park_access", "playground_access", "Port_Facilities_access", "Power_Plants_access","Private_Schools_access","private_shipping_access","restaurant_access","Sand_and_Gravel_Operations_access","supermarket_access","swimming_pool_access", "theatre_access","Urgent_Care_Facilities_access", "Veterans_Health_Administration_Medical_Facilities_access", "water_park_access" )
+ 
+  
+  carr_ru %>% 
+  filter(RUCA_2010 == 1 | RUCA_2010 == 2) %>%
+  filter(pop != 0) %>% 
+  select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, 
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov,
+         all_of(fac_vars)) %>%
+    mutate_at(vars(pop, pop_density, Dist_to_metro, perc_developed, all_of(fac_vars)), ~scale(.)) %>%
+  arrange(-carr3_rural) %>%
+  head(., 10) %>%
+    kbl(caption = 'Summary of CARR factors and variables for RUCA 1 or 2 (urban) census tracts with highest CARR scores') %>% 
+    kable_classic() %>% save_kable(., "urbanRUCA_carr_high2.html")
+  
+    carr_ru %>% 
+  filter(RUCA_2010 == 1 | RUCA_2010 == 2) %>%
+  filter(pop != 0) %>% 
+  select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, 
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov,
+         all_of(fac_vars)) %>%
+  arrange(-carr3_rural) %>%
+  head(., 10) %>%
+    kbl(caption = 'Summary of CARR factors and variables for RUCA 1 or 2 (urban) census tracts with highest CARR scores not scaled') %>% 
+    kable_classic() %>% save_kable(., "urbanRUCA_carr_high_noscale.html")
+  
+  carr_ru %>% 
+  filter(RUCA_2010 == 9 | RUCA_2010 == 10) %>%
+  filter(pop != 0) %>% 
+  select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, 
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov,
+         all_of(fac_vars)) %>%
+    mutate_at(vars(pop, pop_density, Dist_to_metro, perc_developed, all_of(fac_vars)), ~scale(.)) %>%
+  arrange(carr3_rural) %>%
+  head(., 10) %>%
+    kbl(caption = 'Summary of CARR factors and variables for RUCA 9 or 10 (rural) census tracts with lowest CARR scores') %>% 
+    kable_classic() %>% save_kable(., "ruralRUCA_carr_low2.html")
+  
+  carr_ru %>% 
+  filter(RUCA_2010 == 9 | RUCA_2010 == 10) %>%
+  filter(pop != 0) %>% 
+  select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, 
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov,
+         all_of(fac_vars)) %>%
+  arrange(carr3_rural) %>%
+  head(., 10) %>%
+    kbl(caption = 'Summary of CARR factors and variables for RUCA 9 or 10 (rural) census tracts with lowest CARR scores not scaled') %>% 
+    kable_classic() %>% save_kable(., "ruralRUCA_carr_low_noscale.html")
+
+
+```
+
+
+Let's make some quick maps of these contrasting cases by RUCA.
+
+```{r, eval = FALSE }
+
+urban_list <- c(320179501001, 320179502001, 320310035011, 060375991001, 490230102001, 040019426001, 350350009023, 040019426002, 461219401001, 482299503003)
+
+carr_urban <- carr_ru %>% 
+  filter(as.numeric(GEOID)  %in% urban_list) 
+
+
+urban_maps <- map(urban_list, ~ carr_urban %>% 
+             filter(GEOID == .x) %>%
+             ggplot() +
+             annotation_map_tile(zoom )+
+            geom_sf(aes(), fill = NA) +
+            ggtitle (paste0(.x))+
+              theme(axis.text = element_blank())
+             )
+
+grid.arrange(grobs=urban_maps, ncol=2) 
+
+ggsave("urbanRUCA_carr_high.png", width = 12, height = 24, units = "in")
+
+
+rural_list <- c(261614229001, 540659708003, 080130136013, 260210113006, 390059711002, 261614229002, 040139806001, 260210113003, 250110415024, 391439611003)
+
+carr_rural <- carr_ru %>% 
+  filter(as.numeric(GEOID)  %in% rural_list) 
+
+
+rural_maps <- map(rural_list, ~ carr_rural %>% 
+             filter(GEOID == .x) %>%
+             ggplot() +
+             annotation_map_tile(zoom )+
+            geom_sf(aes(), fill = NA) +
+            ggtitle (paste0(.x))+
+              theme(axis.text = element_blank())
+             )
+
+grid.arrange(grobs=rural_maps, ncol=2) 
+
+ggsave("ruralRUCA_carr_low.png", width = 12, height = 24, units = "in")
+
+```
+
+
+
+## Basic CARR descriptives
+
+Get percentile values, mean, and sd for some context on carr values.
+
+```{r}
+
+quantile(carr_ru_ia$carr3_rural, probs = c(0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95), na.rm=TRUE)
+
+mean(carr_ru_ia$carr3_rural)
+
+sd(carr_ru_ia$carr3_rural)
+
+quantile(carr_ru_ia %>% filter(pop != 0) %>% dplyr::select(carr3_rural) %>% st_set_geometry(NULL), probs = c(0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95), na.rm=TRUE)
+
+carr_ru_ia %>% 
+  filter(pop != 0) %>% 
+  st_set_geometry(NULL) %>%
+  summarize(mean = mean(carr3_rural))
+
+carr_ru_ia %>% 
+  filter(pop != 0) %>% 
+  st_set_geometry(NULL) %>%
+  summarize(sd = sd(carr3_rural))
+
+```
+
+
+Pull out some information for specific locations to use as descriptive cases. Also pull national averages for comparison.
+
+
+```{r}
+
+carr_ru_ia %>% 
+  filter(GEOID %in% c("160739502003","360450608041", 
+                      "300859400015", "320310035011",
+                      "530559604002", "511030303002",
+                      "181199558003", "181199558004",
+                      "360470702021")) %>%
+   select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, perc_urban,
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov, perc_urban,all_of(fac_vars)) %>%
+    mutate(perc_urban = as.numeric(perc_urban)) %>%
+   arrange(-carr3_rural) %>% 
+    kbl(caption = 'Raw values for all attributes at select descriptive case locations') %>% 
+    kable_classic() %>% save_kable(., "descriptivecases.html")
+
+carr_ru_ia %>% 
+  filter(pop != 0) %>%
+   select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, perc_urban,
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov, perc_urban,all_of(fac_vars)) %>%
+    mutate(perc_urban = as.numeric(perc_urban)) %>%
+  st_set_geometry(NULL) %>%
+   summarise_if(is.numeric, list(mean,sd)) %>% 
+    kbl(caption = 'National average of raw values for all attributes ') %>% 
+    kable_classic() %>% save_kable(., "nationalaves.html")
+
+```
+
+
+Make some maps of these descriptive cases.
+
+```{r, eval = FALSE }
+
+  # carr_ru_ia <- readRDS("carr_with_percurban.rds")
+
+cases<- carr_ru_ia %>% 
+  filter(GEOID %in% c("160739502003","360450608041", 
+                      "300859400015", "320310035011",
+                      "530559604002", "511030303002",
+                      "181199558003", "181199558004",
+                      "360470702021")) %>%
+   select(GEOID, carr3_rural, avail1Z, access1Z, access2Z, access3Z, 
+         pop, pop_density, Dist_to_metro, perc_developed, perc_urban,
+         census_ua, RUCC_2013, RUCA_2010,  
+         Econ_type, Farm_type, Mine_type, Manuf_type, Govn_type, Rec_type,
+         Nonspec_type, Low_ed, Low_emp , Pop_loss, Retire , Pers_pov, Child_pov, perc_urban) %>%
+    mutate(perc_urban = as.numeric(perc_urban)) 
+
+#read in some key asset location information from the pre-processed files 
+
+super <- readRDS(paste0(wd,"/cleaned_osm/supermarket.rds")) %>% mutate(type = "supermarket") %>% select(type)
+# park <- readRDS(paste0(wd,"/cleaned_osm/park.rds"))%>% mutate(type = "park")%>% select(type)
+school<- readRDS(paste0(wd,"/cleaned_hifld/Public_Schools.rds")) %>% mutate(type = "public school")%>% select(type)
+elec<- readRDS(paste0(wd,"/cleaned_hifld/Electric_Power_Transmission_Lines.rds")) %>% mutate(type = "electric line")%>% select(type)
+fire<- readRDS(paste0(wd,"/cleaned_hifld/Fire_Stations.rds")) %>% mutate(type = "fire station")%>% select(type)
+bank<- readRDS(paste0(wd,"/cleaned_hifld/FDIC_Insured_Banks.rds")) %>% mutate(type = "bank")%>% select(type)
+library<- readRDS(paste0(wd,"/cleaned_osm/library.rds")) %>% mutate(type = "library")%>% select(type)
+playground<- readRDS(paste0(wd,"/cleaned_osm/playground.rds")) %>% mutate(type = "playground")%>% select(type)
+comcenter<- readRDS(paste0(wd,"/cleaned_osm/community_centre.rds")) %>% mutate(type = "community center")%>% select(type)
+museum<- readRDS(paste0(wd,"/cleaned_osm/museum.rds")) %>% mutate(type = "museum")%>% select(type)
+# ems<- readRDS(paste0(wd,"/cleaned_hifld/Emergency_Medical_Service_EMS_Stations.rds")) %>% mutate(type = "emergency medical services")%>% select(type)
+restaurant<- readRDS(paste0(wd,"/cleaned_osm/restaurant.rds")) %>% mutate(type = "restaurant")%>% select(type)
+movies<- readRDS(paste0(wd,"/cleaned_osm/cinema.rds")) %>% mutate(type = "movie theater")%>% select(type)
+hospital<- readRDS(paste0(wd,"/cleaned_hifld/Hospitals.rds")) %>% mutate(type = "hospital")%>% select(type)
+
+crs<-"+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs" # Albers Equal Area
+
+combo <- rbind(super, school, fire, bank, library, playground, comcenter, museum,  restaurant, movies, hospital) %>% st_transform(.,crs)
+elec <- elec %>% st_transform(., crs)
+
+#make maps with basemap for area of interest plus key asset locations
+# library(ggimage)
+#for areas within 10 km of blockgroup
+
+r_cases <- cases %>% filter(.,!(GEOID %in% c("181199558003","181199558004", "511030303002","530559604002")))
+                            
+r_case_maps <- map(r_cases$GEOID, ~ cases %>% 
+              filter(GEOID == .x) %>%
+             ggplot() +
+               annotation_map_tile(zoomin = 0, cachedir = wd)+ 
+               # geom_sf(data = elec[st_buffer(cases %>% 
+               #   filter(GEOID == .x), 20000),], aes(color = "Electric", linetype = "Electric Lines"), color = "#ffffb3", lwd = 0.75) +
+               geom_sf(data = combo[st_buffer(cases %>% 
+                filter(GEOID == .x), 20000),], aes(shape = type, color = type), size = 2) +
+               geom_sf(aes(), fill = NA, lwd = 1) +
+               scale_color_brewer(name = "Asset", palette = "Paired")+
+               scale_shape_manual(name = "Asset", values = c(15,16,3,17,18,25,20,8,22, 24,23)) +
+               ggtitle (paste0(.x)) +
+               theme_minimal() +
+               theme(axis.text = element_blank(), legend.title = element_blank()) +
+               annotation_scale(location = "br")
+             )
+
+
+
+r_case_maps[1] #this uses a 50 km buffer
+ggsave("map1.png", width = 6, height = 4, units = "in")
+
+r_case_maps[2] #this uses a 20 km buffer
+ggsave("map2.png", width = 6, height = 4, units = "in")
+
+r_case_maps[3]#this uses a 50 km buffer
+ggsave( "map3.png", width = 6, height = 4, units = "in")
+
+r_case_maps[4]#this uses a 10 km buffer
+ggsave("map4.png", width = 6, height = 4, units = "in")
+
+r_case_maps[5] #this uses a 2 km buffer
+ggsave("map5.png", width = 6, height = 4, units = "in")
+
+
+u_cases <- cases %>% filter(.,GEOID %in% c("181199558003","181199558004", "511030303002","530559604002"))
+                            
+u_case_maps <- map(u_cases$GEOID, ~ cases %>% 
+              filter(GEOID == .x) %>%
+             ggplot() +
+               annotation_map_tile(zoomin = 0, cachedir = wd)+ 
+               # geom_sf(data = elec[st_buffer(cases %>% 
+               #   filter(GEOID == .x), 20000),], aes(color = "Electric", linetype = "Electric Lines"), color = "#ffffb3", lwd = 0.75) +
+               geom_sf(data = combo[st_buffer(cases %>% 
+                filter(GEOID == .x), 500),], aes(shape = type, color = type), size = 2) +
+               geom_sf(aes(), fill = NA, lwd = 1) +
+               scale_color_brewer(name = "Asset", palette = "Paired")+
+               scale_shape_manual(name = "Asset", values = c(15,16,3,17,18,25,20,8,22, 24,23)) +
+               ggtitle (paste0(.x)) +
+               theme_minimal() +
+               theme(axis.text = element_blank(), legend.title = element_blank()) +
+               annotation_scale()
+             )
+
+u_case_maps[1] #this uses a 100 meter buffer
+ggsave("map6.png", width = 6, height = 4, units = "in")
+
+u_case_maps[2] #this uses a 100 meter buffer
+ggsave("map7.png", width = 6, height = 4, units = "in")
+
+u_case_maps[3] #this uses a 500 meter buffer
+ggsave("map8.png", width = 6, height = 4, units = "in")
+
+u_case_maps[4] #this uses a 100 meter buffer
+ggsave( "map9.png", width = 6, height = 4, units = "in")
+
+```
+
+
+That's all folks!
+
+
+
+

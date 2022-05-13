@@ -1,0 +1,622 @@
+---
+title: "Community Assets and Relative Rurality Data Exploration"
+author: "Kate"
+date: "9/9/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, cache=TRUE, fig.width = 8, cache.lazy = FALSE)
+
+library(pacman)
+p_load(kableExtra, tidyverse, USAboundaries, tigris, doParallel, reshape2, sf, units, patchwork, ggcorrplot, scales, gridExtra)
+
+wd<-getwd()
+
+#Notes: drop Crushed Stone and Intermodal Freight, fix Parks and Public Schools (cleaning scripts), calc oil and gas wells
+```
+
+# Service and Amenity Community Assets in the US {.tabset}
+
+In this document we examine measures of availability and access of community assets (classified as services and amenities), as well as the raw data used to produce these measures. The raw data comes primarily from Open Street Map and the Homeland Infrastructure Foundation-Level Data, with a few pieces of data pulled from the  EPA, DOT, and the FTC (summer 2019). The raw OSM and HIFLD data is processed to remove duplicate and non-unique records. Measures were created for each individual service or amenity measure. *Availability* was calculated for each U.S. census designated blockgroup as the density in count per square meter and *access* was calculated as the shortest distance to the centroid of each blockgroup.^[Just pondering... would a measure of "sufficiency" in terms of count per relevant population be an appropriate addition later on?]
+
+We also examine measures of relative rurality derived from US Census population, travel and place data, and USGS MRLC landcover data.
+
+## Community Assets and Relative Rurality Index
+
+This data is intended for use in constructing an index of Community Assets and Relative Rurality. The framework for the proposed index and the variables used are shown in the table below.
+
+```{r table}
+
+
+
+'Type of Assets'<-c('Transportation Infrastructure','Agriculture & Natural Resources Processing', 'Energy Infrastructure','Data & Cellular Infrastructure', 'Schools','Banking','Government Services', 'Health Services', 'Water and Wastewater Infrastructure', 'Law enforcement and Emergency services','Food', 'Outdoor activities', 'Entertainment', 'Restaurants','Gyms and sports centers','Places of worship', 'Shopping centers',  'Population', 'Density', 'Percent developed area', 'Distance to metro','Distance to highways','Time to work')
+
+'Specific Assets'<-c('Port facilities, intermodal freight facilities, air to truck facilities, national freight system, airports',
+'Natural gas processing plants, ethanol loading facilities, oil refineries, ethanol plants, biodiesel plants, oil and natural gas wells, sand and gravel operations, mines and mineral resources, other mineral operations, metal mines, industrial mineral operations, agricultural mineral operations, construction minerals operations, crushed stone operations, coal fields',
+'Natural gas delivery points, hydrocarbon gas liquid pipelines, electric power transmission lines, electric substations, gas stations',
+'Cellular towers, boradband access',
+'Colleges and universities, child care centers, private schools, public schools',
+'FDIC banks, Insured credit unions',
+'State government buildings, post office',
+'Veteran medical facilities, urgent care facilities, nursing homes, hospitals, public health departments, dentist, optometrist, clinics', 
+'Public drinking water systems, sewage treatment facilities,community water systems',
+'EMS stations, police stations, fire stations, local emergency operations centers',
+'Supermarkets' ,
+'Park, zoo, nature reserve, swimming pool, playground, water park',
+'Theatres, museum, movie theater, arts center, community center, library',
+'Restaurants',
+'Gyms',
+'Places of Worship',
+'Department stores, hardware stores',
+NA,NA,NA,NA,NA,NA)
+
+tbl<-as.data.frame(cbind(`Type of Assets`, `Specific Assets`)) 
+
+tbl %>% kbl(caption = 'Table 1: Variables and scales used in the construction of index') %>%
+  kable_classic(full_width = T, html_font = "Cambria") %>%
+  pack_rows("Services",1,11) %>% pack_rows("Amenities",12,17) %>% pack_rows("Relative Rurality", 18,23)
+
+
+```
+
+## Open Street Map Data
+
+This is a list of all the Open Street Map data files obtained and processed. ^[Some features not in the framework table are included here.]
+
+```{r OSM}
+files<-list.files(paste0(wd,"/osm/"))
+files
+```
+
+Note that there are files that give **point** geometries (pt) and those that give **polygon** geometries (ply) for the same type of feature. This is because Open Street Map contributers add the feature locations in different ways and they are pulled seperately in the api call. In addition, for some features there are multiple pt and ply files (e.g. pt2). These are data files that were manually called after incomplete data pulls from the api (due to 'timing out or data limits' on the OSM server.) 
+
+To clean the data multiple pt or ply datafiles for a single feature were merged, then duplicate geometries in the merged pt or ply files were removed, then polygons (from the ply file) that overlapped with points (e.g. a feature had both a point and polygon geometry) were removed, the remaining polygons were converted to points by finding the centroid of the polygons, and the original pt and polygon centroid point files were merged. In some cases the same feature was added by multiple OSM contributers, but with slightly different geometries, therefore features with the same name and address and locations that were near (but not exactly the same) were identified and duplicates removed. Similarly, some features were entered multiple times, but with slightly different geometries/locations and slightly different names (typos or missing names) or mistyped addresses. Therefore, points that may have had a different name and address, but were within 10 meters of each other were identified and only one of these points was retained.
+
+The final list of cleaned OSM data files is:
+
+```{r OSM2}
+files<-list.files(paste0(wd,"/cleaned_osm/"))
+files
+```
+
+The data looks like this:
+
+
+```{r OSM_combine, results="hide"}
+
+dat<-readRDS(paste0(wd,"/cleaned_osm/",files[1])) %>% mutate(feature = paste(str_remove(files[1], "\\..*")))
+
+foreach (i=2:length(files)) %do% {
+  
+  d<-readRDS(paste0(wd,"/cleaned_osm/",files[i])) %>% mutate(feature = paste(str_remove(files[i], "\\..*")))
+  
+  dat<- bind_rows(dat, d)
+}
+
+dat_osm <- dat
+
+
+```
+
+```{r OSM_tbl}
+
+dat_osm %>% group_by(feature) %>%  slice_head(n=5) %>% 
+  kbl(caption = 'Table 2: Example data for each OSM feature') %>% kable_classic()
+
+
+```
+
+The count of records for each feature type is:
+
+```{r OSM_n}
+
+
+dat_osm %>% st_drop_geometry() %>% group_by(feature) %>%  add_tally() %>% summarise_at(., .vars=c("n"), ~mean(., na.rm=T)) %>% 
+  kbl(caption = 'Table 3: Number of Records for each OSM feature type') %>% kable_classic()
+
+``` 
+
+
+Below are the locations for each feature type across the US.
+
+```{r OSM_map, cache=TRUE, fig.height=20}
+st<- us_boundaries(map_date = NULL, type = c("state"),
+resolution = c("low"), states = NULL) %>% shift_geometry(position="below")
+
+ggplot() +  geom_sf(data=st) +
+  geom_sf(data=shift_geometry(dat_osm), color= "steelblue", size=0.2 )  +
+  facet_wrap(~feature, ncol=3) +
+  theme(legend.position="none")
+```
+
+
+
+
+## Homeland Infrastructure Foundation-Level Data
+
+This is a list of all the Homeland Infrastructure Foundation-Level Data files obtained and processed.
+
+```{r HIFLD}
+files<-list.files(paste0(wd,"/hifld/"))
+files<- matrix(unlist(files), ncol=6, byrow=T) #break into a n_assets x 6 matrix (where 6 is the number of individual files ina  shapefile)
+uassets<-files[ ,1]
+uassets
+```
+
+These data files were manually downloaded from the [HIFLD Open Data website](https://hifld-geoplatform.opendata.arcgis.com/). Features are represented either by points, polygons, or lines. The files are less messy than the OSM data as they are official government data sources and do not rely on (or allow) the general public to contribute to the data. To clean the data I first checked for and removed any duplicate geometries (exact copies) and then, for polygon and point data only, checked for features that were in close proximity (100 meters) and retained only one of existing close proximity pairs. 
+
+Note: the Oil_and_Natural_Gas_Wells data was not processed due to the presence of more than 1 million point locations. This can be done if deemed neccesary.
+
+
+The final list of cleaned HIFLD data files is:
+
+```{r HIFLD2}
+files<-list.files(paste0(wd,"/cleaned_hifld/"))
+files
+```
+
+The data files tend to be more different across features (varying column names and numbers) than the OSM data is, but the core of the data looks like this:
+
+```{r HIFLD_combine, results="hide"}
+
+invisible(dat<-readRDS(paste0(wd,"/cleaned_hifld/",files[1])) %>% mutate(feature = paste(str_remove(files[1], "\\..*"))))
+
+select.vars <- function(df) {if(dim(df)[2] < 3){df %>% dplyr::select(1:dim(df)[2]-1)} else {df %>% dplyr::select(1:3)}}
+
+foreach (i=2:length(files)) %do% {
+  
+  d<-readRDS(paste0(wd,"/cleaned_hifld/",files[i])) %>% 
+    select.vars(.) %>% 
+    mutate(feature = paste(str_remove(files[i], "\\..*")))
+  
+  dat<- bind_rows(dat, d)
+} 
+# Error in { : task 4 failed - "Can't subset columns that don't exist.
+# x Locations 8, 9, 10, 11, 12, etc. don't exist.
+# i There are only 7 columns."
+
+dat_hifld <- dat
+
+```
+
+
+``` {r hifld_tbl}
+
+dat_hifld %>% dplyr::select (1:16) %>% group_by(feature) %>%  slice_head(n=3) %>% 
+  kbl(caption = 'Table 2: Example data for each HIFLD feature') %>% kable_classic()
+
+```
+
+
+The count of records for each feature type is:
+
+```{r HIFLD_n}
+
+
+dat_hifld %>% st_drop_geometry() %>% group_by(feature) %>%  add_tally() %>% summarise_at(., .vars=c("n"), ~mean(., na.rm=T)) %>% 
+  kbl(caption = 'Table 3: Number of Records for each HIFLD feature type') %>% kable_classic()
+
+``` 
+
+Below are the locations for each feature type across the US. (Dropped observations outside the 50 states plus Puetro Rico.)
+
+```{r HIFLD_map,  fig.height= 40}
+st<- us_boundaries(map_date = NULL, type = c("state"),
+resolution = c("low"), states = NULL) %>% shift_geometry(position="below")
+
+ggplot() +  geom_sf(data=st) +
+  geom_sf(data=st_crop(shift_geometry(dat_hifld), st),   color= "steelblue", size=0.2 )  +
+  facet_wrap(~feature, ncol=3) +
+  theme(legend.position="none")
+```
+
+
+## Availability Measures
+
+
+Now let's take a look at the calculated availability of each feature. For point and polygon geometries, availability was calculated as the count of a feature in a block group divided by the area of the blockgroup (units of count/square kilometers). For line geometries (pipelines, roads, electric lines) availability was calculated as simple presence (1) or absence (0) in each block group.Similarly drinking water availability was calculated as presence or absence, while broadband access is in terms of count of providers per blockgroup area.
+
+
+
+### US Availability of Services and Amenities
+
+```{r US_avail}
+
+rm(list = ls())
+
+full <- readRDS( "US_full_09032021.rds")
+
+full <- full %>% replace(., is.na(.), 0)
+
+avail<- full %>% select(GEOID, STATEFP, Agricultural_Minerals_Operations_avail:zoo_avail) %>% drop_units(.) %>% rename(Intermodal_Freight_Marine_avail = `Intermodal_Freight_Facilities%3A_Marine_Roll_on_Roll_off_avail`, Wastewater = Environmental_Protection_Agency_EPA_Facility_Registry_Service_FRS_Wastewater_Treatment_Plants_avail) %>%
+  rename_all(str_remove_all, "_") %>% rename_all(str_remove,"avail")
+
+avail_descriptives <- avail %>% st_drop_geometry(.) %>% dplyr::select(-GEOID, -STATEFP)  %>%
+  summarise_all(.,funs(`mean` = mean, 
+                `sd` = sd, 
+                `min` = min,  
+                `5thPercentile` = quantile(., probs = 0.05), 
+                `max` = max, 
+                `95thPercentile` = quantile(., probs = 0.95))) 
+
+avd <- avail_descriptives %>%
+  tidyr::pivot_longer(cols = everything(),
+               names_sep = "_",
+               names_to = c("Variable","statistic"),
+               values_to = "density")
+
+avd <- spread(avd, statistic, density) 
+
+table <- avd %>% kbl(digits=4, caption = 'Table 4: Descriptive statistics for Availability (densities are in #/sqkm, presence has max of 1 and the mean represents the percent of all locations where the asset is found)') %>% kable_classic()
+
+table
+
+
+```
+
+
+```{r outliers}
+
+#let's find outliers (places where the highest value is more than 2x the next highest value)
+features<- colnames(avail) %>% .[3:75]
+
+outs <-  map_df(features, ~avail  %>% 
+                  dplyr::select(.x) %>% slice_max(!! rlang::sym(.x), n=2, with_ties = FALSE) %>% 
+                  mutate(feature = .x) %>% rename(Top2 = .x))
+
+outliers <- outs %>% group_by(feature) %>% mutate(Is_Outlier = ifelse(Top2/lead(Top2) >= 1.5, "Yes", "No"))
+
+
+out_tbl <- outliers %>% st_set_geometry(NULL) %>% kbl(digits=4, caption = 'Outliers in Availability based on the Max value being 1.5 or more times greater than the second highest value)') %>% kable_classic()
+
+out_tbl
+
+# save_kable(out_tbl, "outliers_table.html")
+# 
+# ggplot() + geom_sf(data=outliers, aes(fill=Is_Outlier),  color= NA, size=0.2 )
+# 
+# 
+# outs <-  map_df(features, ~avail  %>% 
+#                   dplyr::select(.x) %>% slice_max(!! rlang::sym(.x), n=3, with_ties = FALSE) %>% 
+#                   mutate(feature = .x) %>% rename(Top3 = .x))
+# 
+# outliers <- outs %>% group_by(feature) %>% mutate(Is_Outlier = ifelse(lead(Top3)/lead(Top3,n=2) >= 1.5, "Yes", "No"))
+# 
+# 
+# out_tbl <- outliers %>% st_set_geometry(NULL) %>% kbl(digits=4, caption = 'Outliers in Availability based on the Max value being 1.5 or more times greater than the second highest value)') %>% kable_classic()
+# 
+# out_tbl
+
+```
+
+Let's take a look at the distributions. I first show the distribtuions as is and then the log transformed distributions.
+
+
+
+```{r avail_pdf, fig.height=40}
+#♠ Yay! I got a heart when I added this code chunk. Or is it a spade???
+
+
+# features<- colnames(avail) %>% .[3:75]
+# plots<- map(features, ~ggplot(data = avail) + geom_histogram(data=avail, aes(x = .data[[.x]]), bins=500, fill= "blue",color="blue", size=0.2, alpha=0.5))
+# 
+# p1 <- grid.arrange(grobs=plots, ncol=4) 
+
+# ggsave("avail_pdf1.png",p1, height = 40, width=8, units="in")
+
+knitr::include_graphics("avail_pdf1.png")
+             
+# wrap_plots(plots,ncol=4)
+
+
+
+```
+
+
+```{r avail_pdf2, fig.height=40, cache=T}
+#♠ Yay! I got a heart when I added this code chunk. Or is it a spade???
+
+
+# features<- colnames(avail) %>% .[3:75]
+# avail2 <- avail %>% select(features) %>% st_set_geometry(., NULL) %>% mutate_all(~log(.))
+# plots2<- map(features, ~ggplot(data = avail2) + geom_histogram(data=avail2, aes(x = .data[[.x]]), bins=500, fill= "blue",color="blue", size=0.2, alpha=0.5))
+# 
+# p2 <- grid.arrange(grobs=plots2, ncol=4) 
+# ggsave("avail_pdf2.png",p2, height = 40, width=8, units="in")
+
+knitr::include_graphics("avail_pdf2.png")
+
+
+```
+
+Now let's see the correlations. Correlations between -0.1 and 0.1 were dropped (set as NA).
+
+
+```{r avail_cor, fig.height=40, cache=T}
+#♠ Yay! I got a heart when I added this code chunk. Or is it a spade???
+
+
+
+cm<- cor(avail %>% select(-GEOID, -STATEFP) %>% st_drop_geometry())
+cm[cm <=0.1 & cm>=-0.1] <-NA
+# cm[cm <=0.5] <-NA
+
+ggcorrplot(cm, type="lower", lab= TRUE, colors = c("#6D9EC1", "white", "#E46726"))
+
+
+
+cm %>%  kbl(digits=2, caption = 'Table 8: Correlation matrix for Availability') %>% kable_classic()
+
+
+```
+
+And let's see the spatial distribution of availability across blockgroups. (Lighter colors indicate higher values, dark purple is 0.)
+
+```{r avail_ks_maps, fig.height=40,  cache=T}
+
+# features<- colnames(avail) %>% .[3:75]
+# st<- us_boundaries(map_date = NULL, type = c("state"),
+# resolution = c("low"), states = NULL) %>% shift_geometry(position="below")
+# 
+# avail_sf<- avail %>% filter(!STATEFP %in% c("60","66","69", "72", "78")) %>% shift_geometry(.) %>% st_crop(., st)
+# 
+# maps<- map(features, ~ggplot() + 
+#              geom_sf(data = avail_sf, aes(fill= .data[[.x]]), size=0.2, color=NA )  +
+#             scale_fill_viridis_c(limits=c(0,1), oob=squish) + theme(legend.position="none")+ 
+#            ggtitle(paste0(.x)))
+# 
+# p3 <- grid.arrange(grobs=maps, ncol=3) 
+# 
+# ggsave("avail_map1.png",p3, height = 40, width=8, units="in")
+
+knitr::include_graphics("avail_map1.png")
+
+
+
+```
+
+And now let's see the spatial distribution of log-transformed availability. So many NAs (from log(0))..... Nas are in gray.
+
+```{r avail_ks_maps2, fig.height=40,  cache=T}
+
+# features<- colnames(avail) %>% .[3:75]
+# st<- us_boundaries(map_date = NULL, type = c("state"),
+# resolution = c("low"), states = NULL) %>% shift_geometry(position="below")
+# 
+# avail_sf<- avail %>% filter(!STATEFP %in% c("60","66","69", "72", "78")) %>% shift_geometry(.) %>% st_crop(., st)
+# avail_sf2<- avail_sf %>% mutate_if(is.numeric, ~log(.))
+# 
+# maps2<- map(features, ~ggplot() + 
+#              geom_sf(data = avail_sf2 %>% mutate_if(is.numeric, ~log(.)), aes(fill= .data[[.x]]), size=0.2, color=NA )  +
+#             scale_fill_viridis_c() + theme(legend.position="none")+ 
+#            ggtitle(paste0(.x)))
+# 
+# 
+# p4 <-grid.arrange(grobs=maps2, ncol=3) 
+# 
+# ggsave("avail_map2.png",p4, height = 40, width=8, units="in")
+
+knitr::include_graphics("avail_map2.png")
+
+
+
+```
+
+
+
+## Accessibility Measures
+
+
+Now let's take a look at the calculated accessibility of each feature. Accessibility was calculated as the distance from the center of a block group to the nearest service or amenity feature (kilometers). 
+
+### US Accessibility of Services and Amenities
+
+```{r US_access}
+
+rm(list = ls())
+
+full <- readRDS( "US_full_09032021.rds")
+
+full <- full %>% replace(., is.na(.), 0)
+
+access<- full %>% select(GEOID, STATEFP, Agricultural_Minerals_Operations_access:zoo_access) %>% drop_units(.) %>% rename(Intermodal_Freight_Marine_access = `Intermodal_Freight_Facilities%3A_Marine_Roll_on_Roll_off_access`, Wastewater = Environmental_Protection_Agency_EPA_Facility_Registry_Service_FRS_Wastewater_Treatment_Plants_access) %>%
+  rename_all(str_remove_all, "_") %>% rename_all(str_remove,"access")
+
+access_descriptives <- access %>% st_drop_geometry(.) %>% dplyr::select(-GEOID, -STATEFP)  %>%
+  summarise_all(.,funs(`mean` = mean, 
+                `sd` = sd, 
+                `min` = min,  
+                `5thPercentile` = quantile(., probs = 0.05), 
+                `max` = max, 
+                `95thPercentile` = quantile(., probs = 0.95))) 
+
+acs <- access_descriptives %>%
+  tidyr::pivot_longer(cols = everything(),
+               names_sep = "_",
+               names_to = c("Variable","statistic"),
+               values_to = "distance")
+
+acs <- spread(acs, statistic, distance) 
+
+table <- acs %>% kbl(digits=4, caption = 'Table 4: Descriptive statistics for Access (in terms of distance in kilometers from the center of a block group to the nearest feature)') %>% kable_classic()
+
+table
+
+
+```
+
+Let's take a look at the distributions. 
+
+
+
+```{r access_pdf, fig.height=40, cache=T}
+#♠ Yay! I got a heart when I added this code chunk. Or is it a spade???
+
+
+# features<- colnames(access) %>% .[3:75]
+# plots<- map(features, ~ggplot(data = access) + geom_histogram(data=access, aes(x = .data[[.x]]), bins=500, fill= "blue",color="blue", size=0.2, alpha=0.5))
+# 
+# p5<- grid.arrange(grobs=plots, ncol=4) 
+#              
+# # wrap_plots(plots,ncol=4)
+# 
+# ggsave("access_pdf.png",p5, height = 40, width=8, units="in")
+
+knitr::include_graphics("access_pdf.png")
+
+
+```
+
+
+Now let's see the correlations. Correlations between -0.1 and 0.1 were dropped (set as NA).
+
+
+```{r access_cor, fig.height=40, cache=T}
+#♠ Yay! I got a heart when I added this code chunk. Or is it a spade???
+
+
+
+cm<- cor(access %>% select(-GEOID, -STATEFP) %>% st_drop_geometry())
+cm[cm <=0.1 & cm>=-0.1] <-NA
+# cm[cm <=0.5] <-NA
+
+ggcorrplot(cm, type="lower", lab= TRUE, colors = c("#6D9EC1", "white", "#E46726"))
+
+
+
+cm %>%  kbl(digits=2, caption = 'Table 8: Correlation matrix for Access') %>% kable_classic()
+
+
+```
+
+
+And let's see the spatial distribution of access across blockgroups. (Lighter colors indicate higher values, dark purple is 0.)
+
+```{r access_ks_maps, fig.height=40,  cache=T}
+
+# features<- colnames(access) %>% .[3:75]
+# st<- us_boundaries(map_date = NULL, type = c("state"),
+# resolution = c("low"), states = NULL) %>% shift_geometry(position="below")
+# 
+# access_sf<- access %>% filter(!STATEFP %in% c("60","66","69", "72", "78")) %>% shift_geometry(.) %>% st_crop(., st)
+# 
+# maps<- map(features, ~ggplot() + 
+#              geom_sf(data = access_sf, aes(fill= .data[[.x]]), size=0.2, color=NA )  +
+#             scale_fill_viridis_c() + theme(legend.position="none")+ 
+#            ggtitle(paste0(.x)))
+# 
+# p6 <- grid.arrange(grobs=maps, ncol=3) 
+# 
+# ggsave("access_map.png",p6, height = 40, width=8, units="in")
+
+knitr::include_graphics("access_map.png")
+
+
+```
+
+
+## Relative Rurality Measures
+
+
+Last, but not least, let's take a look at the relative rurality measures. These include population density, percent developed area, and distance to metro area. 
+
+### US Accessibility of Services and Amenities
+
+```{r US_rr}
+
+full <- readRDS( "US_full_09032021.rds")
+
+full <- full %>% replace(., is.na(.), 0)
+
+rr<- full %>% select(GEOID, STATEFP, pop:perc_developed) %>% drop_units(.) %>%
+  rename_all(str_remove_all, "_") 
+
+rr_descriptives <- rr %>% st_drop_geometry(.) %>% dplyr::select(-GEOID, -STATEFP)  %>%
+  summarise_all(.,funs(`mean` = mean, 
+                `sd` = sd, 
+                `min` = min,  
+                `5thPercentile` = quantile(., probs = 0.05), 
+                `max` = max, 
+                `95thPercentile` = quantile(., probs = 0.95))) 
+
+rrt <- rr_descriptives %>%
+  tidyr::pivot_longer(cols = everything(),
+               names_sep = "_",
+               names_to = c("Variable","statistic"),
+               values_to = "Value")
+
+rrt <- spread(rrt, statistic, Value) 
+
+table <- rrt %>% kbl(digits=4, caption = 'Table 4: Descriptive statistics for relative rurality') %>% kable_classic()
+
+table
+
+
+```
+
+
+
+Let's take a look at the distributions. 
+
+
+
+```{r rr_pdf,  cache=T}
+#♠ Yay! I got a heart when I added this code chunk. Or is it a spade???
+
+
+features<- colnames(rr) %>% .[3:7]
+plots<- map(features, ~ggplot(data = rr) + geom_histogram(data=rr, aes(x = .data[[.x]]), bins=500, fill= "blue",color="blue", size=0.2, alpha=0.5))
+
+grid.arrange(grobs=plots, ncol=3) 
+             
+# wrap_plots(plots,ncol=4)
+
+
+
+```
+
+
+Now let's see the correlations. Correlations between -0.1 and 0.1 were dropped (set as NA).
+
+
+```{r rr_cor,  cache=T}
+#♠ Yay! I got a heart when I added this code chunk. Or is it a spade???
+
+
+
+cm<- cor(rr %>% select(-GEOID, -STATEFP) %>% st_drop_geometry())
+cm[cm <=0.1 & cm>=-0.1] <-NA
+# cm[cm <=0.5] <-NA
+
+ggcorrplot(cm, type="lower", lab= TRUE, colors = c("#6D9EC1", "white", "#E46726"))
+
+
+
+cm %>%  kbl(digits=2, caption = 'Table 8: Correlation matrix for Relative Rurality') %>% kable_classic()
+
+
+```
+
+And let's see the spatial distribution of access across blockgroups. (Lighter colors indicate higher values, dark purple is 0.)
+
+```{r rr_maps,   cache=T}
+
+features<- colnames(rr) %>% .[3:7]
+st<- us_boundaries(map_date = NULL, type = c("state"),
+resolution = c("low"), states = NULL) %>% shift_geometry(position="below")
+
+rr_sf<- rr %>% filter(!STATEFP %in% c("60","66","69", "72", "78")) %>% shift_geometry(.) %>% st_crop(., st)
+
+maps<- map(features, ~ggplot() + 
+             geom_sf(data = rr_sf, aes(fill= .data[[.x]]), size=0.2, color=NA )  +
+            scale_fill_viridis_c() + theme(legend.position="none")+ 
+           ggtitle(paste0(.x)))
+
+grid.arrange(grobs=maps, ncol=3) 
+
+
+
+
+```
+
