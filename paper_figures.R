@@ -1,3 +1,5 @@
+# Description: Script used to create figures used in published paper (https://doi.org/10.1016/j.jrurstud.2022.12.025).
+# Author: Kate Nelson
 
 library(tidyverse)
 library(ggstance)
