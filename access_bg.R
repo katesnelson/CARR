@@ -1,9 +1,9 @@
-# This script will be used to compute measures of asset accessibility in block groups. 
-  # Accessibility will be calculated as the reciprocal of the shortest straight-line distance from the 
-  # centroid of a block group to an asset within two hundred miles of that block group. Block groups for 
-  # which an asset is not located within two hundred miles are assigned an accessibility value of zero. 
-  # Smaller values of the accessibility measure indicate that an asset is located far from a block group and 
-  # hence is less convenient to reach and make use of.
+# Description: This script will be used to compute measures of asset accessibility in block groups. 
+  # Accessibility will be calculated as the shortest straight-line distance from the 
+  # centroid of a block group to the nearest asset. Larger values  indicate that an asset is located far 
+  # from a block group and hence is less convenient to reach and make use of.
+# Author: Kate Nelson
+# Last Modified: September 2021
 
 library(pacman)
 
@@ -38,8 +38,6 @@ foreach (i=1:length(files)) %do% {
   dat <- readRDS(paste0(wd, "/cleaned_osm/",files[i])) #read in cleaned data file
     
     sub <- bgs %>% filter(STATEFP == 20) #subset blockgroups to state of KS
-        # bb <- st_buffer(sub, 200*1609.34) #create a 200 mile around the state of KS (1609.34 meters in a mile)
-        # dat_s <- st_crop(dat, bb) #crops dataset to buffered area
     ctr_s <- ctr %>% filter(STATEFP == 20) #subset blockgroup centroids to state of KS
     
     
@@ -72,18 +70,10 @@ foreach (i=1:length(files)) %do% {
   
   dat <- readRDS(paste0(wd, "/cleaned_osm/",files[i])) #read in cleaned data file
   
-      # sub <- bgs %>% filter(STATEFP == 20) #subset blockgroups to state of KS
-      # bb <- st_buffer(sub, 200*1609.34) #create a 200 mile around the state of KS (1609.34 meters in a mile)
-      # dat_s <- st_crop(dat, bb) #crops dataset to buffered area
-      # ctr_s <- ctr %>% filter(STATEFP == 20) #subset blockgroup centroids to state of KS
-  
-  
   access<- ctr %>% mutate(nearest = try(st_nearest_feature(.,dat))) %>% 
     mutate(dist = st_distance(., dat[nearest,], by_element = TRUE)) %>% 
     st_drop_geometry(.) %>%
     left_join(bgs, ., by="GEOID")
-  
-  
   
   saveRDS(access, paste0(wd, "/access/","US", files[i]))
 }
@@ -112,17 +102,13 @@ foreach (i=1:length(files)) %do% {
   
    
       sub <- bgs %>% filter(STATEFP == 20) #subset blockgroups to state of KS
-      # bb <- st_buffer(sub, 200*1609.34) #create a 200 mile around the state of KS (1609.34 meters in a mile)
-      # dat_s <- st_crop(dat, bb) #crops dataset to buffered area
       ctr_s <- ctr %>% filter(STATEFP == 20) #subset blockgroup centroids to state of KS
-      
-      
+           
       access_s<- ctr_s %>% mutate(nearest = try(st_nearest_feature(.,dat))) %>% 
         mutate(dist = st_distance(., dat[nearest,], by_element = TRUE)) %>% 
         st_drop_geometry(.) %>%
         left_join(sub, ., by="GEOID")
-      
-      
+           
       
       saveRDS(access_s, paste0(wd, "/access/","ks", files[i]))
   }
@@ -149,8 +135,7 @@ foreach (i=1:length(files)) %do% { #restart at intermodal freight air to train #
     st_drop_geometry(.) %>%
     left_join(bgs, ., by="GEOID")
   
-  
-  
+    
   saveRDS(access, paste0(wd, "/access/","US", files[i]))
   }
   }
