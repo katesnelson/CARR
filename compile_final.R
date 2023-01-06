@@ -1,4 +1,6 @@
-#This script will be used to compile all of the metrics produced for the CAR index. 
+# This script will be used to compile all of the metrics produced for the CARR index. 
+# Author: Kate Nelson
+# Last Modified: September 2021
 
 
 library(pacman)
@@ -50,7 +52,7 @@ files<-list.files(paste0(wd,"/avail/"), pattern = "^US")
   df<- x %>% select(unique(colnames(.))) %>% rename(GEOID = GEOID_avail) #get rid of duplicate GEOID_avail columns and rename GEOID
 
   final_avail <- df %>% 
-    select(-c("Crushed_Stone_Operations_avail","Intermodal_Freight_Facilities_avail")) #get rid of things we don't need
+    select(-c("Crushed_Stone_Operations_avail","Intermodal_Freight_Facilities_avail")) #get rid of things we don't need/want
   
   
 
