@@ -1,3 +1,7 @@
+# Description: This script queries the OpenStreetMap api to automatically extract locations of designated assets across all states in the U.S.
+# Author: Kate Nelson
+# Last Modified: August 2019
+
 
 library(osmdata)
 library(sf)
@@ -5,9 +9,6 @@ library(dplyr)
 library(data.table)
 #library(devtools, jsonlite)
 
-
-
-# setwd("C:/Users/ksnelson/Documents/Collaborators & Research Projects/Rurality/osm/")
 
 wd<-getwd()
 set_overpass_url('https://overpass.kumi.systems/api/interpreter')
@@ -365,18 +366,3 @@ head (available_features ())
 #https://www.rdocumentation.org/packages/ggmap/versions/2.6.1/topics/geocode
 #https://rdrr.io/cran/googleway/man/google_reverse_geocode.html
 
-
-x <- opq(bbox = c(-0.27, 51.47, -0.20, 51.50)) %>% # Chiswick Eyot in London, U.K.
-  add_osm_feature(key = 'name', value = "Thames", value_exact = FALSE) %>%
-  osmdata_sf()
-y<-x$osm_points
-
-
-q <- opq ("portsmouth usa") %>%
-  add_osm_feature(key = "amenity", value = "restaurant") %>%
-  add_osm_feature(key = "amenity", value = "pub") # There are none of these
-
-not_so_much_data <- opq(bbox = 'city of london uk') %>%
-  add_osm_feature(key = 'highway') %>%
-  add_osm_feature(key = 'name') %>%
-  osmdata_sf()
