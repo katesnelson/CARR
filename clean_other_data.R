@@ -1,8 +1,7 @@
-# This script will be used to clean data not obtained from OSM or HIFLD. 
-# Specifically, duplicate locations across
-# point and polygon files will be reconciled and all locations will be converted to points. Future versions may 
-# use SafeGraph (https://www.safegraph.com/) cellphone data to determine if business locations are still active.
-# On projection https://gis.stackexchange.com/questions/375725/appropriate-crs-for-close-distances-in-usa
+# Description: This script will be used to clean data not obtained from OSM or HIFLD. 
+#   Specifically, EPA drinking water data, FTC Broadband data, NLCD developed area data, metropolitan distance, and population data were cleaned and processed. 
+# Author: Kate Nelson
+# Last Modified: January 2022
 
 library(pacman)
 
