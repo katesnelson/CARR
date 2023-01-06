@@ -1,8 +1,10 @@
-# This script will be used to compute measures of asset availability in block groups. 
+# Description: This script will be used to compute measures of asset availability in block groups. 
   # For each type of unit-level service and amenity asset with a point or polygon geometry (e.g. post office, airport, grocery store) 
   # a measure of availability will be constructed by computing the density in counts per hundreds of square miles for each block group. 
   # For each type of unit-level asset with a line geometry (e.g. national freight system, electric transmission lines) availability will 
   # be assigned either a value of one or zero to indicate presence or absence, respectively, in a block group. 
+# Author: Kate Nelson
+# Last Modified: September 2021
 
 
 library(pacman)
