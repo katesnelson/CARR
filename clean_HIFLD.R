@@ -1,8 +1,8 @@
-# This script will be used to clean HIFLD data. 
-# Specifically, duplicate locations across
-# point and polygon files will be reconciled and all locations will be converted to points. Future versions may 
-# use SafeGraph (https://www.safegraph.com/) cellphone data to determine if business locations are still active.
-# On projection https://gis.stackexchange.com/questions/375725/appropriate-crs-for-close-distances-in-usa
+# Description: This script will be used to clean HIFLD data. 
+#   Specifically, duplicate locations across point and polygon files will be reconciled. 
+#   On projection https://gis.stackexchange.com/questions/375725/appropriate-crs-for-close-distances-in-usa
+# Author: Kate Nelson
+# Last Modified: July 2021 (added unique processing for large oil and gas well data)
 
 library(pacman)
 
