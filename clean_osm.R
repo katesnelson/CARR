@@ -1,6 +1,8 @@
-# This script will be used to clean the extracted OpenStreetMap data. Specifically, duplicate locations across
-# point and polygon files will be reconciled and all locations will be converted to points. Future versions may 
-# use SafeGraph (https://www.safegraph.com/) cellphone data to determine if business locations are still active.
+# Description: This script will be used to clean the extracted OpenStreetMap data. Specifically, duplicate locations across
+#   point and polygon files will be reconciled and all locations will be converted to points. 
+# Author: Kate Nelson
+# Last Modified: June 2020
+
 
 library(pacman)
 
@@ -121,6 +123,4 @@ ply<-st_transform(polys, crs)
     
     saveRDS(pt_final, paste0(wd, "/cleaned_osm/",uassets[i],".rds"))
 }
-    #park, pharmacy, supermarket did not run (Error in { : 
-# task 16 failed - "arguments imply differing number of rows: 125178, 754"
-# In addition: There were 23 warnings (use warnings() to see them))
+  
