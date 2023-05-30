@@ -1,7 +1,7 @@
 # CARR - Community Assets and Relative Rurality
 
 
-This is the repository for scripts related to the processing and development of the Community Assets and Relative Rurality (CARR) index. The repository also hosts a .csv file with the CARR Index and its constituent components for all census block-groups in the coterminous U.S. as calculated using data extracts from 2019. 
+This is the repository for scripts related to the processing and development of the Community Assets and Relative Rurality (CARR) index. The repository also hosts a [.csv file](https://github.com/katesnelson/CARR/blob/main/carr_public_2022_geoid_repaired.zip) (file is zipped due to size) with the CARR Index and its constituent components for all census block-groups in the coterminous U.S. as calculated using data extracts from 2019. 
 
 **The paper on the index is now published in the Journal of Rural studies at [https://doi.org/10.1016/j.jrurstud.2022.12.025](https://doi.org/10.1016/j.jrurstud.2022.12.025).**
 
