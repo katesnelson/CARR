@@ -4,6 +4,7 @@
 
 Versions of CARR for census tracts, counties, zip codes, school districts, and tribal areas are available at [Zenodo (Version 2)](https://zenodo.org/records/13850429) and [ruralityindex.com](https://ruralityindex.com/)! Metadata, construction information, and descriptive analyses are included.
 
+## About the CARR Repo ##
 
 This is the repository for scripts related to the processing and development of the Community Assets and Relative Rurality (CARR) index. The repository also hosts a [.csv file](https://github.com/katesnelson/CARR/blob/main/carr_public_2022_geoid_repaired.zip) (file is zipped due to size) with the CARR Index and its constituent components for all census block-groups in the coterminous U.S. as calculated using data extracts from 2019. The data is also published on Zenodo at [https://doi.org/10.5281/zenodo.8072187](https://doi.org/10.5281/zenodo.8072187). 
 
